@@ -1,0 +1,82 @@
+[package]
+name = "whispers"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Speech-to-text dictation tool for Wayland"
+license = "MPL-2.0"
+repository = "https://github.com/OneNoted/whispers"
+keywords = ["wayland", "speech-to-text", "whisper", "dictation", "voice"]
+categories = ["accessibility", "multimedia"]
+exclude = [".jj/", ".git/", "target/"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "io-util", "process"] }
+
+# Audio capture
+cpal = "0.17"
+
+# Whisper transcription
+whisper-rs = "0.15"
+llama-cpp-2 = "0.1.138"
+
+# uinput virtual keyboard for paste keystroke
+evdev = { version = "0.13" }
+
+# Sound feedback
+rodio = { version = "0.21", default-features = false, features = ["playback", "wav", "mp3", "flac", "vorbis", "mp4"] }
+
+# Config
+serde = { version = "1", features = ["derive"] }
+encoding_rs = "0.8"
+serde_json = "1"
+toml = "0.9"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4.5"
+clap_complete_nushell = "4.5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+
+# Signal sending for PID-based toggle
+libc = "0.2"
+
+# Model downloading and management
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
+indicatif = "0.18"
+futures-util = "0.3"
+toml_edit = "0.23"
+dialoguer = { version = "0.12", default-features = false }
+
+# OSD overlay (whispers-osd binary) — wayland-native, no GTK
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = ["client"], optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+
+[features]
+default = ["osd", "cuda"]
+cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
+osd = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr"]
+
+[[bin]]
+name = "whispers"
+path = "src/main.rs"
+
+[[bin]]
+name = "whispers-osd"
+path = "src/bin/whispers-osd.rs"
+required-features = ["osd"]
+
+[[bin]]
+name = "whispers-rewrite-worker"
+path = "src/bin/whispers-rewrite-worker.rs"
+
+[dev-dependencies]
+httpmock = "0.7"

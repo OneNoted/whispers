@@ -1,0 +1,51 @@
+# whispers configuration
+# Copy to ~/.config/whispers/config.toml and customize
+#
+# Keybinding is handled by your compositor. Example for Hyprland:
+#   bind = SUPER ALT, D, exec, whispers
+#
+# First invocation starts recording, second invocation stops + transcribes + pastes.
+
+[audio]
+# Input device name (empty = system default)
+device = ""
+# Sample rate in Hz (whisper requires 16000)
+sample_rate = 16000
+
+[whisper]
+# Path to ggml whisper model file
+# Recommended: large-v3-turbo (best accuracy/speed tradeoff, 1.6GB)
+# Alternatives: ggml-large-v3.bin (most accurate, 6x slower)
+#               ggml-large-v3-turbo-q5_0.bin (quantized, 574MB, slightly less accurate)
+model_path = "~/.local/share/whispers/ggml-large-v3-turbo.bin"
+# Language code ("en", "fr", "de", etc.)
+language = "auto"
+# Enable GPU acceleration (set false to force CPU)
+use_gpu = true
+# Enable flash attention when GPU is enabled
+flash_attn = true
+
+[postprocess]
+# "raw" keeps output close to Whisper, "advanced_local" enables the rewrite model
+mode = "raw"
+
+[rewrite]
+# Managed rewrite model name for advanced_local mode
+selected_model = "llama-3.2-3b-q4_k_m"
+# Manual GGUF path override (empty = use selected managed model)
+# Custom rewrite models should be chat-capable GGUFs with an embedded
+# chat template that llama.cpp can apply at runtime.
+model_path = ""
+# Timeout for local rewrite inference in milliseconds
+timeout_ms = 30000
+# Maximum characters accepted from the rewrite model
+max_output_chars = 1200
+# Maximum tokens to generate for rewritten output
+max_tokens = 256
+
+[feedback]
+# Play sound feedback on start/stop
+enabled = true
+# Custom sound file paths (empty = use bundled sounds)
+start_sound = ""
+stop_sound = ""
