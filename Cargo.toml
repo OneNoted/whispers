@@ -65,7 +65,7 @@ wayland-protocols = { version = "0.32", features = ["client"], optional = true }
 wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 
 [features]
-default = ["osd", "cuda"]
+default = ["osd"]
 cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
 osd = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr"]
 
