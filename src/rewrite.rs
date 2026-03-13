@@ -8,7 +8,9 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
+use llama_cpp_2::openai::OpenAIChatTemplateParams;
 use llama_cpp_2::sampling::LlamaSampler;
+use serde_json::json;
 
 use crate::rewrite_profile::ResolvedRewriteProfile;
 use crate::rewrite_profile::RewriteProfile;
@@ -224,6 +226,10 @@ fn build_rewrite_prompt(
     custom_instructions: Option<&str>,
 ) -> std::result::Result<String, String> {
     let prompt = build_prompt(transcript, profile, custom_instructions)?;
+    if matches!(profile, ResolvedRewriteProfile::Qwen) {
+        return build_qwen_rewrite_prompt(model, chat_template, &prompt);
+    }
+
     let messages = vec![
         LlamaChatMessage::new("system".into(), prompt.system)
             .map_err(|e| format!("failed to build rewrite system message: {e}"))?,
@@ -234,6 +240,50 @@ fn build_rewrite_prompt(
     model
         .apply_chat_template(chat_template, &messages, true)
         .map_err(|e| format!("failed to apply rewrite chat template: {e}"))
+}
+
+fn build_qwen_rewrite_prompt(
+    model: &LlamaModel,
+    chat_template: &LlamaChatTemplate,
+    prompt: &RewritePrompt,
+) -> std::result::Result<String, String> {
+    let messages_json = build_oaicompat_messages_json(prompt)?;
+    let result = model
+        .apply_chat_template_oaicompat(
+            chat_template,
+            &OpenAIChatTemplateParams {
+                messages_json: &messages_json,
+                tools_json: None,
+                tool_choice: None,
+                json_schema: None,
+                grammar: None,
+                reasoning_format: None,
+                chat_template_kwargs: None,
+                add_generation_prompt: true,
+                use_jinja: true,
+                parallel_tool_calls: false,
+                enable_thinking: false,
+                add_bos: false,
+                add_eos: false,
+                parse_tool_calls: false,
+            },
+        )
+        .map_err(|e| format!("failed to apply Qwen rewrite chat template: {e}"))?;
+    Ok(result.prompt)
+}
+
+fn build_oaicompat_messages_json(prompt: &RewritePrompt) -> std::result::Result<String, String> {
+    serde_json::to_string(&vec![
+        json!({
+            "role": "system",
+            "content": prompt.system,
+        }),
+        json!({
+            "role": "user",
+            "content": prompt.user,
+        }),
+    ])
+    .map_err(|e| format!("failed to encode rewrite chat messages: {e}"))
 }
 
 pub fn build_prompt(
@@ -266,9 +316,9 @@ fn build_system_instructions(
     if has_policy_context(transcript) {
         let policy_context = &transcript.policy_context;
         instructions.push_str("\n\nCorrection policy contract:\n");
-        instructions.push_str(correction_policy_contract(
-            policy_context.correction_policy,
-        ));
+        instructions.push_str(correction_policy_contract(policy_context.correction_policy));
+        instructions.push_str("\n\nAgentic latitude contract:\n");
+        instructions.push_str(agentic_latitude_contract(policy_context.correction_policy));
         if !policy_context.effective_rule_instructions.is_empty() {
             instructions.push_str("\n\nMatched app rewrite policy instructions:\n");
             for instruction in &policy_context.effective_rule_instructions {
@@ -296,10 +346,26 @@ fn correction_policy_contract(
             "Conservative: stay close to explicit rewrite candidates and glossary evidence. If uncertain, prefer candidate-preserving output over freer rewriting."
         }
         crate::rewrite_protocol::RewriteCorrectionPolicy::Balanced => {
-            "Balanced: allow stronger technical correction when the glossary and app context support it, but still bias toward candidate-backed output."
+            "Balanced: allow stronger technical correction when the glossary, app context, or utterance semantics support it. Prefer candidate-backed output when it is competitive, but do not keep an obviously wrong technical spelling just because it appears in the candidate list."
         }
         crate::rewrite_protocol::RewriteCorrectionPolicy::Aggressive => {
-            "Aggressive: allow freer technical correction and contextual cleanup while still returning only final text within the provided bounds."
+            "Aggressive: allow freer technical correction and contextual cleanup when the utterance strongly points to a technical term or proper name. Candidates are useful evidence, not hard limits, as long as you still return only final text within the provided bounds."
+        }
+    }
+}
+
+fn agentic_latitude_contract(
+    policy: crate::rewrite_protocol::RewriteCorrectionPolicy,
+) -> &'static str {
+    match policy {
+        crate::rewrite_protocol::RewriteCorrectionPolicy::Conservative => {
+            "In conservative mode, treat the candidate list and glossary as the main evidence. Only make a freer technical normalization when the utterance itself makes the intended term unusually clear."
+        }
+        crate::rewrite_protocol::RewriteCorrectionPolicy::Balanced => {
+            "In balanced mode, you may normalize likely technical terms, product names, commands, libraries, languages, editors, or Linux components even when the literal transcript spelling is noisy or the exact canonical form is not already present in the candidate list, as long as the utterance strongly supports that normalization."
+        }
+        crate::rewrite_protocol::RewriteCorrectionPolicy::Aggressive => {
+            "In aggressive mode, you may confidently rewrite phonetically similar words into the most plausible technical term or proper name when the utterance semantics, app context, or nearby category cues make that interpretation clearly better than the literal transcript."
         }
     }
 }
@@ -342,6 +408,11 @@ provided alongside the transcript. If structured edit signals or edit hypotheses
 interpretations as bounded options, choose the best interpretation, and lightly refine it only when needed for natural \
 final text. Prefer transcript spellings for names, brands, and uncommon proper nouns unless a user dictionary or \
 explicit correction says otherwise. Do not normalize names into more common spellings just because they look familiar. \
+When the utterance clearly refers to software, tools, APIs, libraries, Linux components, product names, or other \
+technical concepts, prefer the most plausible intended technical term or proper name over a phonetically similar common \
+word. Use nearby category words like window manager, editor, language, library, package manager, shell, or terminal \
+tool to disambiguate technical names. If the utterance remains genuinely ambiguous, stay close to the transcript rather \
+than inventing a niche term. \
 If an edit intent says to replace or cancel previous wording, preserve that edit and do not keep the spoken correction \
 phrase itself unless the transcript clearly still intends it. Examples:\n\
 - raw: Hello there. Scratch that. Hi.\n  correction-aware: Hi.\n  final: Hi.\n\
@@ -349,7 +420,11 @@ phrase itself unless the transcript clearly still intends it. Examples:\n\
 - raw: My name is Notes, scratch that my name is Jonatan.\n  correction-aware: My my name is Jonatan.\n  aggressive correction-aware: My name is Jonatan.\n  final: My name is Jonatan.\n\
 - raw: Never mind. Hi, how are you today?\n  correction-aware: Hi, how are you today?\n  final: Hi, how are you today?\n\
 - raw: Wait, no, it actually works.\n  correction-aware: Wait, no, it actually works.\n  final: Wait, no, it actually works.\n\
-- raw: Let's meet tomorrow, or rather Friday.\n  correction-aware: Let's meet Friday.\n  final: Let's meet Friday.";
+- raw: Let's meet tomorrow, or rather Friday.\n  correction-aware: Let's meet Friday.\n  final: Let's meet Friday.\n\
+- raw: I'm currently using the window manager Hyperland.\n  correction-aware: I'm currently using the window manager Hyperland.\n  final: I'm currently using the window manager Hyprland.\n\
+- raw: I'm switching from Sui to Hyperland.\n  correction-aware: I'm switching from Sui to Hyperland.\n  final: I'm switching from Sway to Hyprland.\n\
+- raw: I use type script for backend tooling.\n  correction-aware: I use type script for backend tooling.\n  final: I use TypeScript for backend tooling.\n\
+- raw: I edit the config in neo vim.\n  correction-aware: I edit the config in neo vim.\n  final: I edit the config in Neovim.";
 
     match profile {
         ResolvedRewriteProfile::Qwen => {
@@ -362,14 +437,22 @@ any structured edit intents provided alongside the transcript. If structured edi
 present, use the candidate interpretations as bounded options, choose the best interpretation, and lightly refine it \
 only when needed for natural final text. Prefer transcript spellings for names, brands, and uncommon proper nouns \
 unless a user dictionary or explicit correction says otherwise. Do not normalize names into more common spellings just \
-because they look familiar. If an edit intent says to replace or cancel previous wording, preserve that edit and do \
+because they look familiar. When the utterance clearly refers to software, tools, APIs, libraries, Linux components, \
+product names, or other technical concepts, prefer the most plausible intended technical term or proper name over a \
+phonetically similar common word. Use nearby category words like window manager, editor, language, library, package \
+manager, shell, or terminal tool to disambiguate technical names. If the utterance remains genuinely ambiguous, stay \
+close to the transcript rather than inventing a niche term. If an edit intent says to replace or cancel previous wording, preserve that edit and do \
 not keep the spoken correction phrase itself unless the transcript clearly still intends it. Examples:\n\
 - raw: Hello there. Scratch that. Hi.\n  correction-aware: Hi.\n  final: Hi.\n\
 - raw: I'll bring cookies, scratch that, brownies.\n  correction-aware: I'll bring brownies.\n  final: I'll bring brownies.\n\
 - raw: My name is Notes, scratch that my name is Jonatan.\n  correction-aware: My my name is Jonatan.\n  aggressive correction-aware: My name is Jonatan.\n  final: My name is Jonatan.\n\
 - raw: Never mind. Hi, how are you today?\n  correction-aware: Hi, how are you today?\n  final: Hi, how are you today?\n\
 - raw: Wait, no, it actually works.\n  correction-aware: Wait, no, it actually works.\n  final: Wait, no, it actually works.\n\
-- raw: Let's meet tomorrow, or rather Friday.\n  correction-aware: Let's meet Friday.\n  final: Let's meet Friday."
+- raw: Let's meet tomorrow, or rather Friday.\n  correction-aware: Let's meet Friday.\n  final: Let's meet Friday.\n\
+- raw: I'm currently using the window manager Hyperland.\n  correction-aware: I'm currently using the window manager Hyperland.\n  final: I'm currently using the window manager Hyprland.\n\
+- raw: I'm switching from Sui to Hyperland.\n  correction-aware: I'm switching from Sui to Hyperland.\n  final: I'm switching from Sway to Hyprland.\n\
+- raw: I use type script for backend tooling.\n  correction-aware: I use type script for backend tooling.\n  final: I use TypeScript for backend tooling.\n\
+- raw: I edit the config in neo vim.\n  correction-aware: I edit the config in neo vim.\n  final: I edit the config in Neovim."
         }
         ResolvedRewriteProfile::Generic | ResolvedRewriteProfile::LlamaCompat => base,
     }
@@ -499,7 +582,9 @@ Structured edit signals:\n\
 Structured edit intents:\n\
 {edit_intents}\
 Self-corrections were already resolved before rewriting.\n\
-Use only this correction-aware transcript as the source text:\n\
+Use this correction-aware transcript as the main source text. In agentic mode, you may still normalize likely \
+technical terms or proper names when the utterance strongly supports them, even if the exact canonical spelling is not \
+already present in the candidate list:\n\
 {correction_aware}\n\
 {agentic_candidates}\
 Do not restore any canceled wording from earlier in the utterance.\n\
@@ -517,7 +602,9 @@ Structured edit intents:\n\
 {edit_intents}\
 Correction-aware transcript:\n\
 {correction_aware}\n\
-Treat the correction-aware transcript as authoritative for explicit spoken edits.\n\
+Treat the correction-aware transcript as authoritative for explicit spoken edits and overall meaning, but in agentic \
+mode you may normalize likely technical terms or proper names when category cues in the utterance make the intended \
+technical meaning clearly better than the literal transcript.\n\
 {agentic_candidates}\
 \
 Recent segments:\n\
@@ -582,7 +669,7 @@ fn render_agentic_candidates(transcript: &RewriteTranscript) -> String {
     has_policy_context(transcript)
         .then(|| {
             format!(
-                "Available rewrite candidates:\n\
+                "Available rewrite candidates (advisory, not exhaustive in agentic mode):\n\
 {}\
 Glossary-backed candidates:\n\
 {}",
@@ -813,13 +900,7 @@ fn render_typing_context(transcript: &RewriteTranscript) -> String {
                 context.focus_fingerprint,
                 context.app_id.as_deref().unwrap_or("unknown"),
                 context.window_title.as_deref().unwrap_or("unknown"),
-                match context.surface_kind {
-                    crate::rewrite_protocol::RewriteSurfaceKind::Browser => "browser",
-                    crate::rewrite_protocol::RewriteSurfaceKind::Terminal => "terminal",
-                    crate::rewrite_protocol::RewriteSurfaceKind::Editor => "editor",
-                    crate::rewrite_protocol::RewriteSurfaceKind::GenericText => "generic_text",
-                    crate::rewrite_protocol::RewriteSurfaceKind::Unknown => "unknown",
-                },
+                context.surface_kind.as_str(),
                 context.browser_domain.as_deref().unwrap_or("unknown"),
             )
         })
@@ -838,13 +919,7 @@ fn render_recent_session_entries(transcript: &RewriteTranscript) -> String {
             entry.id,
             entry.final_text,
             entry.grapheme_len,
-            match entry.surface_kind {
-                crate::rewrite_protocol::RewriteSurfaceKind::Browser => "browser",
-                crate::rewrite_protocol::RewriteSurfaceKind::Terminal => "terminal",
-                crate::rewrite_protocol::RewriteSurfaceKind::Editor => "editor",
-                crate::rewrite_protocol::RewriteSurfaceKind::GenericText => "generic_text",
-                crate::rewrite_protocol::RewriteSurfaceKind::Unknown => "unknown",
-            }
+            entry.surface_kind.as_str()
         ));
     }
     rendered
@@ -995,11 +1070,7 @@ fn render_glossary_candidates(transcript: &RewriteTranscript) -> String {
 }
 
 fn has_policy_context(transcript: &RewriteTranscript) -> bool {
-    let policy_context = &transcript.policy_context;
-    !policy_context.matched_rule_names.is_empty()
-        || !policy_context.effective_rule_instructions.is_empty()
-        || !policy_context.active_glossary_terms.is_empty()
-        || !policy_context.glossary_candidates.is_empty()
+    transcript.policy_context.is_active()
 }
 
 #[allow(dead_code)]
@@ -1086,13 +1157,13 @@ fn strip_tagged_section(input: &str, open: &str, close: &str) -> String {
 mod tests {
     use super::*;
     use crate::rewrite_protocol::{
-        RewriteCandidate, RewriteCandidateKind, RewriteEditAction, RewriteEditHypothesis,
-        RewriteEditHypothesisMatchSource, RewriteEditIntent, RewriteEditSignal,
-        RewriteEditSignalKind, RewriteEditSignalScope, RewriteEditSignalStrength,
-        RewriteIntentConfidence, RewritePolicyContext, RewriteReplacementScope,
-        RewriteSessionBacktrackCandidate, RewriteSessionBacktrackCandidateKind,
-        RewriteSessionEntry, RewriteSurfaceKind, RewriteTailShape, RewriteTranscript,
-        RewriteTranscriptSegment, RewriteTypingContext,
+        RewriteCandidate, RewriteCandidateKind, RewriteCorrectionPolicy, RewriteEditAction,
+        RewriteEditHypothesis, RewriteEditHypothesisMatchSource, RewriteEditIntent,
+        RewriteEditSignal, RewriteEditSignalKind, RewriteEditSignalScope,
+        RewriteEditSignalStrength, RewriteIntentConfidence, RewritePolicyContext,
+        RewriteReplacementScope, RewriteSessionBacktrackCandidate,
+        RewriteSessionBacktrackCandidateKind, RewriteSessionEntry, RewriteSurfaceKind,
+        RewriteTailShape, RewriteTranscript, RewriteTranscriptSegment, RewriteTypingContext,
     };
 
     fn correction_transcript() -> RewriteTranscript {
@@ -1189,18 +1260,73 @@ mod tests {
         }
     }
 
+    fn fast_agentic_transcript() -> RewriteTranscript {
+        RewriteTranscript {
+            raw_text: "I'm currently using the window manager hyperland.".into(),
+            correction_aware_text: "I'm currently using the window manager hyperland.".into(),
+            aggressive_correction_text: None,
+            detected_language: Some("en".into()),
+            typing_context: Some(RewriteTypingContext {
+                focus_fingerprint: "focus".into(),
+                app_id: Some("browser".into()),
+                window_title: Some("Matrix".into()),
+                surface_kind: RewriteSurfaceKind::GenericText,
+                browser_domain: None,
+                captured_at_ms: 42,
+            }),
+            recent_session_entries: Vec::new(),
+            session_backtrack_candidates: Vec::new(),
+            recommended_session_candidate: None,
+            segments: Vec::new(),
+            edit_intents: Vec::new(),
+            edit_signals: Vec::new(),
+            edit_hypotheses: Vec::new(),
+            rewrite_candidates: vec![
+                RewriteCandidate {
+                    kind: RewriteCandidateKind::Literal,
+                    text: "I'm currently using the window manager hyperland.".into(),
+                },
+                RewriteCandidate {
+                    kind: RewriteCandidateKind::ConservativeCorrection,
+                    text: "I'm currently using the window manager hyperland.".into(),
+                },
+            ],
+            recommended_candidate: None,
+            policy_context: RewritePolicyContext {
+                correction_policy: RewriteCorrectionPolicy::Balanced,
+                matched_rule_names: vec!["baseline/global-default".into()],
+                effective_rule_instructions: vec![
+                    "Use category cues like window manager to disambiguate nearby technical names."
+                        .into(),
+                ],
+                active_glossary_terms: Vec::new(),
+                glossary_candidates: Vec::new(),
+            },
+        }
+    }
+
     #[test]
     fn instructions_cover_self_correction_examples() {
         let instructions = rewrite_instructions(ResolvedRewriteProfile::LlamaCompat);
         assert!(instructions.contains("Return only the finished text"));
         assert!(instructions.contains("Never reintroduce text"));
         assert!(instructions.contains("scratch that, brownies"));
+        assert!(instructions.contains("window manager Hyperland"));
+        assert!(instructions.contains("switching from Sui to Hyperland"));
     }
 
     #[test]
     fn qwen_instructions_forbid_reasoning_tags() {
         let instructions = rewrite_instructions(ResolvedRewriteProfile::Qwen);
         assert!(instructions.contains("Do not emit reasoning"));
+        assert!(instructions.contains("phonetically similar common word"));
+    }
+
+    #[test]
+    fn base_instructions_allow_technical_term_inference() {
+        let instructions = rewrite_instructions(ResolvedRewriteProfile::LlamaCompat);
+        assert!(instructions.contains("technical concepts"));
+        assert!(instructions.contains("phonetically similar common word"));
     }
 
     #[test]
@@ -1212,6 +1338,57 @@ mod tests {
         );
         assert!(instructions.contains("Return only the finished text"));
         assert!(instructions.contains("Keep product names exact."));
+    }
+
+    #[test]
+    fn oaicompat_messages_json_contains_system_and_user_roles() {
+        let prompt = RewritePrompt {
+            system: "system instructions".into(),
+            user: "user input".into(),
+        };
+
+        let messages_json =
+            build_oaicompat_messages_json(&prompt).expect("encode oaicompat messages");
+        let messages: serde_json::Value =
+            serde_json::from_str(&messages_json).expect("parse oaicompat messages");
+        let messages = messages.as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "system instructions");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "user input");
+    }
+
+    #[test]
+    fn agentic_system_prompt_relaxes_candidate_restrictions() {
+        let instructions = build_system_instructions(
+            &fast_agentic_transcript(),
+            ResolvedRewriteProfile::Qwen,
+            None,
+        );
+        assert!(instructions.contains("Agentic latitude contract"));
+        assert!(instructions.contains(
+            "do not keep an obviously wrong technical spelling just because it appears in the candidate list"
+        ));
+        assert!(instructions.contains(
+            "even when the literal transcript spelling is noisy or the exact canonical form is not already present in the candidate list"
+        ));
+    }
+
+    #[test]
+    fn fast_route_prompt_allows_agentic_technical_normalization() {
+        let transcript = fast_agentic_transcript();
+        assert!(matches!(rewrite_route(&transcript), RewriteRoute::Fast));
+        let prompt = build_user_message(&transcript);
+        assert!(prompt.contains(
+            "you may normalize likely technical terms or proper names when category cues in the utterance make the intended technical meaning clearly better than the literal transcript"
+        ));
+        assert!(
+            prompt.contains(
+                "Available rewrite candidates (advisory, not exhaustive in agentic mode)"
+            )
+        );
     }
 
     #[test]

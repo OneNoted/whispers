@@ -308,9 +308,11 @@ fn preferred_current_text(transcript: &RewriteTranscript) -> String {
         .recommended_candidate
         .as_ref()
         .map(|candidate| candidate.text.trim())
-        .filter(|text| !text.is_empty())
-        .or_else(|| Some(transcript.correction_aware_text.trim()).filter(|text| !text.is_empty()))
-        .or_else(|| Some(transcript.raw_text.trim()).filter(|text| !text.is_empty()))
+        .filter(|text: &&str| !text.is_empty())
+        .or_else(|| {
+            Some(transcript.correction_aware_text.trim()).filter(|text: &&str| !text.is_empty())
+        })
+        .or_else(|| Some(transcript.raw_text.trim()).filter(|text: &&str| !text.is_empty()))
         .unwrap_or_default()
         .to_string()
 }

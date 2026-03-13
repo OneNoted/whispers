@@ -21,16 +21,17 @@ The two invocations communicate via PID file + `SIGUSR1` — no daemon, no IPC s
 
 ## Post-processing modes
 
-`whispers` now has two main dictation modes:
+`whispers` now has three main dictation modes:
 
 - `raw` keeps output close to the direct transcription result and is the default
 - `advanced_local` enables the smart rewrite pipeline after transcription; `[rewrite].backend` chooses whether that rewrite runs locally or in the cloud
+- `agentic_rewrite` uses the same local/cloud rewrite backends as `advanced_local`, but adds app-aware policy rules, technical glossary guidance, and a stricter conservative acceptance guard
 
 The older heuristic cleanup path is still available as deprecated `legacy_basic` for existing configs that already use `[cleanup]`.
 The local rewrite path is managed by `whispers` itself through an internal helper binary installed alongside the main executable, so there is no separate tool or daemon to install manually.
-When `advanced_local` is enabled with `rewrite.backend = "local"`, `whispers` keeps a hidden rewrite worker warm for a short idle window so repeated dictation is much faster without becoming a permanent background daemon.
+When a rewrite mode is enabled with `rewrite.backend = "local"`, `whispers` keeps a hidden rewrite worker warm for a short idle window so repeated dictation is much faster without becoming a permanent background daemon.
 Managed rewrite models are the default path. If you point `rewrite.model_path` at your own GGUF, it should be a chat-capable model with an embedded template that `llama.cpp` can apply at runtime.
-Deterministic personalization rules apply in all modes: dictionary replacements, spoken snippets, and optional append-only custom rewrite instructions for `advanced_local`.
+Deterministic personalization rules apply in all modes: dictionary replacements and spoken snippets. Custom rewrite instructions apply to both rewrite modes, and `agentic_rewrite` can additionally load app rules and glossary entries from separate TOML files.
 Cloud ASR and cloud rewrite are both optional. Local remains the default.
 
 For file transcription, `whispers transcribe --raw <file>` always prints the plain ASR transcript without any post-processing.
@@ -118,6 +119,10 @@ whispers dictionary list
 whispers snippets add signature "Best regards,\nNotes"
 whispers snippets list
 whispers rewrite-instructions-path
+whispers app-rule path
+whispers app-rule add zed-rust "Preserve Rust identifiers." --app-id dev.zed.Zed --correction-policy balanced
+whispers glossary path
+whispers glossary add TypeScript --alias "type script" --surface-kind editor
 ```
 
 That still remains a single install: `whispers` manages local ASR models, the optional local rewrite worker/model, and the optional cloud configuration from the same package. `faster-whisper` is bootstrapped into a hidden managed runtime when you download or prewarm that backend.
@@ -191,7 +196,7 @@ flash_attn = true      # only used when use_gpu=true
 idle_timeout_ms = 120000
 
 [postprocess]
-mode = "raw"           # or "advanced_local"; deprecated: "legacy_basic"
+mode = "raw"           # or "advanced_local" / "agentic_rewrite"; deprecated: "legacy_basic"
 
 [session]
 enabled = true
@@ -215,6 +220,11 @@ timeout_ms = 30000
 idle_timeout_ms = 120000
 max_output_chars = 1200
 max_tokens = 256
+
+[agentic_rewrite]
+policy_path = "~/.local/share/whispers/app-rewrite-policy.toml"
+glossary_path = "~/.local/share/whispers/technical-glossary.toml"
+default_correction_policy = "balanced"
 
 [cloud]
 provider = "openai"    # or "openai_compatible"
@@ -240,7 +250,7 @@ start_sound = ""       # empty = bundled sound
 stop_sound = ""
 ```
 
-When `advanced_local` is enabled, `whispers` also keeps a short-lived local session ledger in the runtime directory so immediate follow-up corrections like `scratch that` can safely replace the most recent dictation entry when focus has not changed. That session behavior is local either way; only the semantic rewrite stage may be cloud-backed.
+When `advanced_local` or `agentic_rewrite` is enabled, `whispers` also keeps a short-lived local session ledger in the runtime directory so immediate follow-up corrections like `scratch that` can safely replace the most recent dictation entry when focus has not changed. That session behavior is local either way; only the semantic rewrite stage may be cloud-backed.
 
 ## Cloud Modes
 
@@ -282,7 +292,7 @@ Whisper.cpp models are downloaded from [Hugging Face](https://huggingface.co/gge
 
 ## Managed rewrite models
 
-When `rewrite.backend = "local"`, `advanced_local` uses a second local model for post-processing. The managed local catalog currently includes:
+When `rewrite.backend = "local"`, both rewrite modes use a second local model for post-processing. The managed local catalog currently includes:
 
 | Model | Size | Notes |
 |-------|------|-------|
@@ -296,11 +306,13 @@ Custom rewrite models should include a chat template that `llama.cpp` can read f
 
 ## Personalization
 
-Dictionary replacements apply deterministically in both `raw` and `advanced_local`, with normalization for case and punctuation but no fuzzy matching. In `advanced_local`, dictionary replacements are applied before the rewrite model and again on the final output so exact names and product terms stay stable.
+Dictionary replacements apply deterministically in `raw`, `advanced_local`, and `agentic_rewrite`, with normalization for case and punctuation but no fuzzy matching. In the rewrite modes, dictionary replacements are applied before the rewrite model and again on the final output so exact names and product terms stay stable.
 
 Spoken snippets also work in all modes. By default, saying `insert <snippet name>` expands the configured snippet text verbatim after post-processing finishes, so the rewrite model cannot paraphrase it. Change the trigger phrase with `personalization.snippet_trigger`.
 
-Custom rewrite instructions live in a separate plain-text file referenced by `rewrite.instructions_path`. `whispers` appends that file to the built-in rewrite prompt for `advanced_local`, while still enforcing the same final-text-only output contract. The file is optional, and a missing file is ignored.
+Custom rewrite instructions live in a separate plain-text file referenced by `rewrite.instructions_path`. `whispers` appends that file to the built-in rewrite prompt for both rewrite modes while still enforcing the same final-text-only output contract. The file is optional, and a missing file is ignored.
+
+`agentic_rewrite` also reads layered app rules from `agentic_rewrite.policy_path` and scoped glossary entries from `agentic_rewrite.glossary_path`. `whispers setup` creates commented starter files for both when you choose the agentic mode, and the minimal CRUD commands above are available for path/list/add/remove workflows.
 
 ## Faster Whisper
 

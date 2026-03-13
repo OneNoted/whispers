@@ -6,7 +6,7 @@ use std::process::Command;
 
 use crate::asr;
 use crate::audio::AudioRecorder;
-use crate::config::{Config, PostprocessMode};
+use crate::config::Config;
 use crate::context;
 use crate::error::Result;
 use crate::feedback::FeedbackPlayer;

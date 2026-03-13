@@ -270,12 +270,84 @@ pub fn conservative_output_allowed(transcript: &RewriteTranscript, text: &str) -
     transcript
         .rewrite_candidates
         .iter()
-        .any(|candidate| candidate.text == text)
+        .any(|candidate| candidate_supports_output(&candidate.text, text))
         || transcript
             .policy_context
             .glossary_candidates
             .iter()
-            .any(|candidate| candidate.text == text)
+            .any(|candidate| candidate_supports_output(&candidate.text, text))
+}
+
+fn candidate_supports_output(candidate: &str, output: &str) -> bool {
+    if candidate.trim() == output.trim() {
+        return true;
+    }
+
+    let candidate_words = normalized_words(candidate);
+    let output_words = normalized_words(output);
+    if candidate_words.is_empty() || output_words.is_empty() {
+        return false;
+    }
+
+    if candidate_words == output_words {
+        return true;
+    }
+
+    // Conservative mode should still allow small technical-term normalizations
+    // when the output clearly preserves a longer sentence candidate.
+    if candidate_words.len() != output_words.len() || candidate_words.len() < 4 {
+        return false;
+    }
+
+    let differing_pairs = candidate_words
+        .iter()
+        .zip(&output_words)
+        .filter(|(candidate_word, output_word)| candidate_word != output_word)
+        .collect::<Vec<_>>();
+    if differing_pairs.is_empty() || differing_pairs.len() > 2 {
+        return false;
+    }
+
+    differing_pairs
+        .into_iter()
+        .all(|(candidate_word, output_word)| {
+            is_minor_term_normalization(candidate_word, output_word)
+        })
+}
+
+fn is_minor_term_normalization(candidate_word: &str, output_word: &str) -> bool {
+    let candidate_len = candidate_word.chars().count();
+    let output_len = output_word.chars().count();
+    let max_len = candidate_len.max(output_len);
+    if max_len < 3 {
+        return false;
+    }
+
+    let distance = levenshtein_distance(candidate_word, output_word);
+    distance > 0 && distance <= 3 && distance * 2 <= max_len + 1
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    if left == right {
+        return 0;
+    }
+
+    let right_chars = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right_chars.len() + 1];
+
+    for (left_index, left_char) in left.chars().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right_chars.iter().enumerate() {
+            let substitution_cost = usize::from(left_char != *right_char);
+            current[right_index + 1] = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(previous[right_index] + substitution_cost);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right_chars.len()]
 }
 
 pub fn ensure_starter_files(config: &Config) -> Result<Vec<String>> {
@@ -465,7 +537,9 @@ fn resolve_policy_context(
     let mut active_glossary_entries = glossary_entries
         .iter()
         .enumerate()
-        .filter_map(|(index, entry)| PreparedGlossaryEntry::new(entry.clone()).map(|entry| (index, entry)))
+        .filter_map(|(index, entry)| {
+            PreparedGlossaryEntry::new(entry.clone()).map(|entry| (index, entry))
+        })
         .filter(|(_, entry)| entry.matcher.matches(context))
         .collect::<Vec<_>>();
     active_glossary_entries
@@ -480,7 +554,10 @@ fn resolve_policy_context(
         matched_rule_names,
         effective_rule_instructions,
         active_glossary_terms: collapse_glossary_terms(&active_glossary_entries),
-        glossary_candidates: build_glossary_candidates(rewrite_candidates, &active_glossary_entries),
+        glossary_candidates: build_glossary_candidates(
+            rewrite_candidates,
+            &active_glossary_entries,
+        ),
     }
 }
 
@@ -489,7 +566,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
         AppRule::built_in(
             "baseline/global-default",
             ContextMatcher::default(),
-            "Use the active typing context, recent dictation context, glossary terms, and bounded candidates to resolve technical dictation cleanly while keeping the final-text-only contract.",
+            "Use the active typing context, recent dictation context, glossary terms, and bounded candidates to resolve technical dictation cleanly while keeping the final-text-only contract. When the utterance clearly points to software, tools, APIs, Linux components, product names, or other technical concepts, prefer the most plausible intended technical term over a phonetically similar common word. Use category cues like window manager, editor, language, library, shell, or package manager to disambiguate nearby technical names. If it remains genuinely ambiguous, stay close to the transcript.",
             Some(default_policy),
         ),
         AppRule::built_in(
@@ -498,7 +575,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::Browser),
                 ..ContextMatcher::default()
             },
-            "Favor clean prose and natural punctuation for browser text fields, but stay grounded in the listed candidates and glossary evidence.",
+            "Favor clean prose and natural punctuation for browser text fields, but stay grounded in the listed candidates, glossary evidence, and the utterance's technical topic when it clearly refers to software or documentation.",
             Some(RewriteCorrectionPolicy::Balanced),
         ),
         AppRule::built_in(
@@ -507,7 +584,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::GenericText),
                 ..ContextMatcher::default()
             },
-            "Favor clean prose and natural punctuation for general text entry while staying grounded in the listed candidates and glossary evidence.",
+            "Favor clean prose and natural punctuation for general text entry while staying grounded in the listed candidates and glossary evidence. If the utterance clearly discusses technical tools or software, prefer the most plausible technical term over a phonetically similar common word.",
             Some(RewriteCorrectionPolicy::Balanced),
         ),
         AppRule::built_in(
@@ -516,7 +593,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::Editor),
                 ..ContextMatcher::default()
             },
-            "Preserve identifiers, filenames, API names, symbols, and technical casing. Avoid rewriting technical wording into generic prose.",
+            "Preserve identifiers, filenames, API names, symbols, and technical casing. Avoid rewriting technical wording into generic prose. Infer likely technical terms and proper names from the utterance when the topic is clearly code, tooling, or software.",
             Some(RewriteCorrectionPolicy::Balanced),
         ),
         AppRule::built_in(
@@ -525,7 +602,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::Terminal),
                 ..ContextMatcher::default()
             },
-            "Preserve commands, flags, paths, package names, environment variables, and punctuation that changes command meaning. If uncertain, prefer the closest listed candidate.",
+            "Preserve commands, flags, paths, package names, environment variables, and punctuation that changes command meaning. Infer technical commands or package names only when the utterance strongly supports them. If uncertain, prefer the closest listed candidate.",
             Some(RewriteCorrectionPolicy::Conservative),
         ),
     ]
@@ -538,10 +615,7 @@ fn matching_rules(rules: &[AppRule], context: Option<&RewriteTypingContext>) -> 
         .filter(|(_, rule)| rule.matcher.matches(context))
         .collect::<Vec<_>>();
     matches.sort_by_key(|(index, rule)| (rule.matcher.specificity_rank(), *index));
-    matches
-        .into_iter()
-        .map(|(_, rule)| rule.clone())
-        .collect()
+    matches.into_iter().map(|(_, rule)| rule.clone()).collect()
 }
 
 fn collapse_glossary_terms(entries: &[PreparedGlossaryEntry]) -> Vec<RewritePolicyGlossaryTerm> {
@@ -552,7 +626,11 @@ fn collapse_glossary_terms(entries: &[PreparedGlossaryEntry]) -> Vec<RewritePoli
             .find(|candidate| candidate.term == entry.term)
         {
             for alias in &entry.aliases {
-                if !existing.aliases.iter().any(|existing_alias| existing_alias == alias) {
+                if !existing
+                    .aliases
+                    .iter()
+                    .any(|existing_alias| existing_alias == alias)
+                {
                     existing.aliases.push(alias.clone());
                 }
             }
@@ -579,7 +657,9 @@ fn build_glossary_candidates(
 
         if let Some(text) = apply_glossary_entries(&candidate.text, glossary_entries)
             && text != candidate.text
-            && !generated.iter().any(|existing: &RewriteCandidate| existing.text == text)
+            && !generated
+                .iter()
+                .any(|existing: &RewriteCandidate| existing.text == text)
             && !rewrite_candidates
                 .iter()
                 .any(|existing| existing.text == text)
@@ -749,7 +829,10 @@ fn ensure_text_file(path: &Path, contents: &str) -> Result<bool> {
 
     write_parent(path)?;
     std::fs::write(path, contents).map_err(|e| {
-        WhsprError::Config(format!("failed to write starter file {}: {e}", path.display()))
+        WhsprError::Config(format!(
+            "failed to write starter file {}: {e}",
+            path.display()
+        ))
     })?;
     Ok(true)
 }
@@ -859,7 +942,10 @@ fn remove_app_rule_entry(rules: &mut Vec<AppRule>, name: &str) -> bool {
 }
 
 fn upsert_glossary_entry(entries: &mut Vec<GlossaryEntry>, entry: GlossaryEntry) {
-    if let Some(existing) = entries.iter_mut().find(|existing| existing.term == entry.term) {
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|existing| existing.term == entry.term)
+    {
         *existing = entry;
         return;
     }
@@ -925,10 +1011,30 @@ mod tests {
             policy.correction_policy,
             RewriteCorrectionPolicy::Conservative
         );
-        assert!(policy
-            .matched_rule_names
-            .iter()
-            .any(|name| name == "baseline/terminal"));
+        assert!(
+            policy
+                .matched_rule_names
+                .iter()
+                .any(|name| name == "baseline/terminal")
+        );
+    }
+
+    #[test]
+    fn built_in_policy_guides_technical_term_inference() {
+        let context = typing_context(RewriteSurfaceKind::GenericText);
+        let policy = resolve_policy_context(
+            RewriteCorrectionPolicy::Balanced,
+            Some(&context),
+            &[],
+            &[],
+            &[],
+        );
+        assert!(
+            policy
+                .effective_rule_instructions
+                .iter()
+                .any(|instruction| instruction.contains("phonetically similar common word"))
+        );
     }
 
     #[test]
@@ -961,9 +1067,15 @@ mod tests {
             &rules,
             &[],
         );
-        assert_eq!(policy.correction_policy, RewriteCorrectionPolicy::Aggressive);
         assert_eq!(
-            policy.effective_rule_instructions.last().map(String::as_str),
+            policy.correction_policy,
+            RewriteCorrectionPolicy::Aggressive
+        );
+        assert_eq!(
+            policy
+                .effective_rule_instructions
+                .last()
+                .map(String::as_str),
             Some("app")
         );
     }
@@ -1029,6 +1141,91 @@ mod tests {
     }
 
     #[test]
+    fn conservative_acceptance_allows_sentence_like_minor_term_normalization() {
+        let mut hyperland_transcript = RewriteTranscript {
+            raw_text: "I'm currently using the window manager hyperland.".into(),
+            correction_aware_text: "I'm currently using the window manager hyperland.".into(),
+            aggressive_correction_text: None,
+            detected_language: Some("en".into()),
+            typing_context: Some(typing_context(RewriteSurfaceKind::Terminal)),
+            recent_session_entries: Vec::new(),
+            session_backtrack_candidates: Vec::new(),
+            recommended_session_candidate: None,
+            segments: Vec::new(),
+            edit_intents: Vec::new(),
+            edit_signals: Vec::new(),
+            edit_hypotheses: Vec::new(),
+            rewrite_candidates: vec![RewriteCandidate {
+                kind: RewriteCandidateKind::ConservativeCorrection,
+                text: "I'm currently using the window manager hyperland.".into(),
+            }],
+            recommended_candidate: None,
+            policy_context: RewritePolicyContext::default(),
+        };
+        hyperland_transcript.policy_context.correction_policy =
+            RewriteCorrectionPolicy::Conservative;
+
+        assert!(conservative_output_allowed(
+            &hyperland_transcript,
+            "I'm currently using the window manager Hyprland."
+        ));
+
+        let mut switch_transcript = RewriteTranscript {
+            raw_text: "I'm switching from Sui to Hyperland.".into(),
+            correction_aware_text: "I'm switching from Sui to Hyperland.".into(),
+            aggressive_correction_text: None,
+            detected_language: Some("en".into()),
+            typing_context: Some(typing_context(RewriteSurfaceKind::Terminal)),
+            recent_session_entries: Vec::new(),
+            session_backtrack_candidates: Vec::new(),
+            recommended_session_candidate: None,
+            segments: Vec::new(),
+            edit_intents: Vec::new(),
+            edit_signals: Vec::new(),
+            edit_hypotheses: Vec::new(),
+            rewrite_candidates: vec![RewriteCandidate {
+                kind: RewriteCandidateKind::ConservativeCorrection,
+                text: "I'm switching from Sui to Hyperland.".into(),
+            }],
+            recommended_candidate: None,
+            policy_context: RewritePolicyContext::default(),
+        };
+        switch_transcript.policy_context.correction_policy = RewriteCorrectionPolicy::Conservative;
+
+        assert!(conservative_output_allowed(
+            &switch_transcript,
+            "I'm switching from Sway to Hyprland."
+        ));
+    }
+
+    #[test]
+    fn conservative_acceptance_keeps_short_command_fragments_strict() {
+        let mut transcript = RewriteTranscript {
+            raw_text: "cargo clipy".into(),
+            correction_aware_text: "cargo clipy".into(),
+            aggressive_correction_text: None,
+            detected_language: Some("en".into()),
+            typing_context: Some(typing_context(RewriteSurfaceKind::Terminal)),
+            recent_session_entries: Vec::new(),
+            session_backtrack_candidates: Vec::new(),
+            recommended_session_candidate: None,
+            segments: Vec::new(),
+            edit_intents: Vec::new(),
+            edit_signals: Vec::new(),
+            edit_hypotheses: Vec::new(),
+            rewrite_candidates: vec![RewriteCandidate {
+                kind: RewriteCandidateKind::ConservativeCorrection,
+                text: "cargo clipy".into(),
+            }],
+            recommended_candidate: None,
+            policy_context: RewritePolicyContext::default(),
+        };
+        transcript.policy_context.correction_policy = RewriteCorrectionPolicy::Conservative;
+
+        assert!(!conservative_output_allowed(&transcript, "cargo clippy"));
+    }
+
+    #[test]
     fn apply_runtime_policy_adds_glossary_candidates() {
         let _env_lock = crate::test_support::env_lock();
         let _guard = crate::test_support::EnvVarGuard::capture(&[
@@ -1058,10 +1255,12 @@ mod tests {
 
         let mut transcript = transcript_with_candidates(RewriteSurfaceKind::Editor);
         apply_runtime_policy(&config, &mut transcript);
-        assert!(transcript
-            .rewrite_candidates
-            .iter()
-            .any(|candidate| candidate.text == "TypeScript and sir dee json"));
+        assert!(
+            transcript
+                .rewrite_candidates
+                .iter()
+                .any(|candidate| candidate.text == "TypeScript and sir dee json")
+        );
     }
 
     #[test]

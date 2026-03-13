@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::rewrite_protocol::{RewriteCorrectionPolicy, RewriteSurfaceKind};
+
 #[derive(Parser, Debug)]
 #[command(
     name = "whispers",
@@ -27,21 +29,6 @@ pub enum CompletionShell {
     Zsh,
     Fish,
     Nushell,
-}
-
-#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
-pub enum MatcherSurfaceKind {
-    Browser,
-    Terminal,
-    Editor,
-    GenericText,
-}
-
-#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
-pub enum MatcherCorrectionPolicy {
-    Conservative,
-    Balanced,
-    Aggressive,
 }
 
 #[derive(Subcommand, Debug)]
@@ -214,7 +201,7 @@ pub enum AppRuleAction {
 
         /// Match on the active surface kind
         #[arg(long)]
-        surface_kind: Option<MatcherSurfaceKind>,
+        surface_kind: Option<RewriteSurfaceKind>,
 
         /// Match on the exact app ID
         #[arg(long)]
@@ -230,7 +217,7 @@ pub enum AppRuleAction {
 
         /// Override the effective correction policy
         #[arg(long)]
-        correction_policy: Option<MatcherCorrectionPolicy>,
+        correction_policy: Option<RewriteCorrectionPolicy>,
     },
 
     /// Remove an app rule by name
@@ -259,7 +246,7 @@ pub enum GlossaryAction {
 
         /// Match on the active surface kind
         #[arg(long)]
-        surface_kind: Option<MatcherSurfaceKind>,
+        surface_kind: Option<RewriteSurfaceKind>,
 
         /// Match on the exact app ID
         #[arg(long)]
