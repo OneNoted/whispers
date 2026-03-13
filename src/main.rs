@@ -1,33 +1,44 @@
 mod app;
+mod asr;
+mod asr_model;
+mod asr_protocol;
 mod audio;
-mod branding;
 mod cleanup;
 mod cli;
+mod cloud;
 mod completions;
 mod config;
+mod context;
 mod error;
+mod faster_whisper;
 mod feedback;
 mod file_audio;
 mod inject;
 mod model;
+mod nemo_asr;
+mod personalization;
 mod postprocess;
 mod rewrite_model;
+mod rewrite_profile;
 mod rewrite_protocol;
 mod rewrite_worker;
+mod session;
 mod setup;
 #[cfg(test)]
 mod test_support;
 mod transcribe;
+mod ui;
 
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use crate::cli::{Cli, Command, ModelAction, RewriteModelAction};
-use crate::config::{Config, PostprocessMode};
-use crate::error::WhsprError;
-use crate::transcribe::{TranscriptionBackend, WhisperLocal};
+use crate::cli::{
+    AsrModelAction, Cli, CloudAction, Command, DictionaryAction, ModelAction, RewriteModelAction,
+    SnippetAction,
+};
+use crate::config::Config;
 
 struct PidLock {
     path: PathBuf,
@@ -42,7 +53,7 @@ impl Drop for PidLock {
 
 fn pid_file_path() -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(runtime_dir).join(crate::branding::MAIN_PID_FILE)
+    PathBuf::from(runtime_dir).join("whispers.pid")
 }
 
 fn read_pid_from_lock(path: &Path) -> Option<libc::pid_t> {
@@ -54,7 +65,7 @@ fn process_exists(pid: libc::pid_t) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
 }
 
-fn pid_belongs_to_current_binary(pid: libc::pid_t) -> bool {
+fn pid_belongs_to_whspr(pid: libc::pid_t) -> bool {
     if !process_exists(pid) {
         return false;
     }
@@ -73,7 +84,7 @@ fn pid_belongs_to_current_binary(pid: libc::pid_t) -> bool {
     let current_name = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| crate::branding::MAIN_BINARY.into());
+        .unwrap_or_else(|| "whispers".into());
     let cmdline = match std::fs::read(format!("/proc/{pid}/cmdline")) {
         Ok(bytes) => bytes,
         Err(_) => return false,
@@ -113,9 +124,9 @@ fn signal_existing_instance(path: &Path) -> crate::error::Result<bool> {
         return Ok(false);
     };
 
-    if !pid_belongs_to_current_binary(pid) {
+    if !pid_belongs_to_whspr(pid) {
         tracing::warn!(
-            "pid lock at {} points to non-whispers process ({pid}), removing",
+            "pid lock at {} points to non-whspr process ({pid}), removing",
             path.display()
         );
         let _ = std::fs::remove_file(path);
@@ -160,12 +171,14 @@ fn acquire_or_signal_lock() -> crate::error::Result<Option<PidLock>> {
 }
 
 fn init_tracing(verbose: u8) {
-    let level = match verbose {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
+    crate::ui::configure_terminal_colors();
+    crate::ui::set_verbosity(verbose);
+    let filter = match verbose {
+        0 => "whispers=warn",
+        1 => "whispers=info",
+        2 => "whispers=debug",
+        _ => "whispers=trace",
     };
-    let filter = format!("{}={level}", crate::branding::LOG_TARGET);
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -182,32 +195,29 @@ async fn transcribe_file(
     raw: bool,
 ) -> crate::error::Result<()> {
     let config = Config::load(cli.config.as_deref())?;
-    let model_path = config.resolved_model_path();
-    let whisper_config = config.whisper.clone();
+    asr::validate_transcription_config(&config)?;
     tracing::info!("decoding audio file: {}", file.display());
-    let samples = file_audio::decode_audio_file(file)?;
-    let mut preloaded_rewrite_worker = if raw {
+    let mut samples = file_audio::decode_audio_file(file)?;
+    audio::preprocess_audio(&mut samples, file_audio::TARGET_SAMPLE_RATE);
+    let rewrite_service = if raw {
         None
     } else {
-        postprocess::preload_rewrite_worker(&config, "before transcription")
+        postprocess::prepare_rewrite_service(&config)
     };
+    if let Some(service) = rewrite_service.as_ref() {
+        postprocess::prewarm_rewrite_service(service, "file transcription");
+    }
+    let prepared = asr::prepare_transcriber(&config)?;
+    asr::prewarm_transcriber(&prepared, "file transcription");
+    let transcript =
+        asr::transcribe_audio(&config, prepared, samples, file_audio::TARGET_SAMPLE_RATE).await?;
 
-    let backend =
-        tokio::task::spawn_blocking(move || WhisperLocal::new(&whisper_config, &model_path))
-            .await
-            .map_err(|e| WhsprError::Transcription(format!("model loading task failed: {e}")))??;
-
-    let transcript = tokio::task::spawn_blocking(move || {
-        backend.transcribe(&samples, file_audio::TARGET_SAMPLE_RATE)
-    })
-    .await
-    .map_err(|e| WhsprError::Transcription(format!("transcription task failed: {e}")))??;
-
-    let text = if raw || config.postprocess.mode == PostprocessMode::Raw {
+    let text = if raw {
         postprocess::raw_text(&transcript)
     } else {
-        postprocess::finalize_transcript(&config, transcript, preloaded_rewrite_worker.as_mut())
+        postprocess::finalize_transcript(&config, transcript, rewrite_service.as_ref(), None, None)
             .await
+            .text
     };
 
     if let Some(out_path) = output {
@@ -229,6 +239,7 @@ async fn run_default(cli: &Cli) -> crate::error::Result<()> {
 
     // Load config
     let config = Config::load(cli.config.as_deref())?;
+    asr::validate_transcription_config(&config)?;
     tracing::debug!("config loaded: {config:?}");
 
     app::run(config).await
@@ -258,6 +269,17 @@ async fn main() -> crate::error::Result<()> {
             }
             ModelAction::Select { name } => model::select_model(name, cli.config.as_deref()),
         },
+        Some(Command::AsrModel { action }) => match action {
+            AsrModelAction::List => {
+                asr_model::list_models(cli.config.as_deref());
+                Ok(())
+            }
+            AsrModelAction::Download { name } => {
+                asr_model::download_model(name).await?;
+                Ok(())
+            }
+            AsrModelAction::Select { name } => asr_model::select_model(name, cli.config.as_deref()),
+        },
         Some(Command::RewriteModel { action }) => match action {
             RewriteModelAction::List => {
                 rewrite_model::list_models(cli.config.as_deref());
@@ -271,6 +293,40 @@ async fn main() -> crate::error::Result<()> {
                 rewrite_model::select_model(name, cli.config.as_deref())
             }
         },
+        Some(Command::Dictionary { action }) => match action {
+            DictionaryAction::List => personalization::list_dictionary(cli.config.as_deref()),
+            DictionaryAction::Add { phrase, replace } => {
+                personalization::add_dictionary(cli.config.as_deref(), phrase, replace)
+            }
+            DictionaryAction::Remove { phrase } => {
+                personalization::remove_dictionary(cli.config.as_deref(), phrase)
+            }
+        },
+        Some(Command::Cloud { action }) => match action {
+            CloudAction::Check => {
+                let config = Config::load(cli.config.as_deref())?;
+                cloud::validate_config(&config)?;
+                let service = cloud::CloudService::new(&config)?;
+                service.check().await?;
+                println!(
+                    "Cloud provider '{}' is configured and reachable.",
+                    config.cloud.provider.as_str()
+                );
+                Ok(())
+            }
+        },
+        Some(Command::Snippets { action }) => match action {
+            SnippetAction::List => personalization::list_snippets(cli.config.as_deref()),
+            SnippetAction::Add { name, text } => {
+                personalization::add_snippet(cli.config.as_deref(), name, text)
+            }
+            SnippetAction::Remove { name } => {
+                personalization::remove_snippet(cli.config.as_deref(), name)
+            }
+        },
+        Some(Command::RewriteInstructionsPath) => {
+            personalization::print_rewrite_instructions_path(cli.config.as_deref())
+        }
     }
 }
 

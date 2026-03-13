@@ -1,17 +1,21 @@
 use std::process::Child;
+use std::time::Instant;
 
 #[cfg(feature = "osd")]
 use std::process::Command;
 
+use crate::asr;
 use crate::audio::AudioRecorder;
-use crate::config::Config;
-use crate::error::{Result, WhsprError};
+use crate::config::{Config, PostprocessMode};
+use crate::context;
+use crate::error::Result;
 use crate::feedback::FeedbackPlayer;
 use crate::inject::TextInjector;
 use crate::postprocess;
-use crate::transcribe::{TranscriptionBackend, WhisperLocal};
+use crate::session;
 
 pub async fn run(config: Config) -> Result<()> {
+    let activation_started = Instant::now();
     // Register signals before startup work to minimize early-signal races.
     let mut sigusr1 =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
@@ -26,18 +30,24 @@ pub async fn run(config: Config) -> Result<()> {
     // Play start sound first (blocking), then start recording so the sound
     // doesn't leak into the mic.
     feedback.play_start();
+    let recording_context = context::capture_typing_context();
+    let session_enabled = config.postprocess.mode == PostprocessMode::AdvancedLocal;
+    let recent_session = if session_enabled {
+        session::load_recent_entry(&config.session, &recording_context)?
+    } else {
+        None
+    };
     let mut recorder = AudioRecorder::new(&config.audio);
     recorder.start()?;
     let mut osd = spawn_osd();
     tracing::info!("recording... (run whispers again to stop)");
 
-    // Preload whisper model in background while recording
-    let whisper_config = config.whisper.clone();
-    let model_path = config.resolved_model_path();
-    let model_handle =
-        tokio::task::spawn_blocking(move || WhisperLocal::new(&whisper_config, &model_path));
-    let mut preloaded_rewrite_worker =
-        postprocess::preload_rewrite_worker(&config, "while recording");
+    let transcriber = asr::prepare_transcriber(&config)?;
+    let rewrite_service = postprocess::prepare_rewrite_service(&config);
+    asr::prewarm_transcriber(&transcriber, "recording");
+    if let Some(service) = rewrite_service.as_ref() {
+        postprocess::prewarm_rewrite_service(service, "recording");
+    }
 
     tokio::select! {
         _ = sigusr1.recv() => {
@@ -63,17 +73,22 @@ pub async fn run(config: Config) -> Result<()> {
     let audio = recorder.stop()?;
     feedback.play_stop();
     let sample_rate = config.audio.sample_rate;
+    let audio_duration_ms = ((audio.len() as f64 / sample_rate as f64) * 1000.0).round() as u64;
 
-    tracing::info!("transcribing {} samples...", audio.len());
+    tracing::info!(
+        samples = audio.len(),
+        sample_rate,
+        audio_duration_ms,
+        "transcribing captured audio"
+    );
 
-    // Await preloaded model (instant if it finished during recording)
-    let backend = model_handle
-        .await
-        .map_err(|e| WhsprError::Transcription(format!("model loading task failed: {e}")))??;
-
-    let transcript = tokio::task::spawn_blocking(move || backend.transcribe(&audio, sample_rate))
-        .await
-        .map_err(|e| WhsprError::Transcription(format!("task panicked: {e}")))??;
+    let transcribe_started = Instant::now();
+    let transcript = asr::transcribe_audio(&config, transcriber, audio, sample_rate).await?;
+    tracing::info!(
+        elapsed_ms = transcribe_started.elapsed().as_millis(),
+        transcript_chars = transcript.raw_text.len(),
+        "transcription stage finished"
+    );
 
     if transcript.is_empty() {
         tracing::warn!("transcription returned empty text");
@@ -81,11 +96,39 @@ pub async fn run(config: Config) -> Result<()> {
         return Ok(());
     }
 
-    let text =
-        postprocess::finalize_transcript(&config, transcript, preloaded_rewrite_worker.as_mut())
-            .await;
+    let injection_context = context::capture_typing_context();
+    let recent_session = recent_session.filter(|entry| {
+        let same_focus = entry.entry.focus_fingerprint == injection_context.focus_fingerprint;
+        if !same_focus {
+            tracing::debug!(
+                previous_focus = entry.entry.focus_fingerprint,
+                current_focus = injection_context.focus_fingerprint,
+                "session backtrack blocked because focus changed before injection"
+            );
+        }
+        same_focus
+    });
+    let finalize_started = Instant::now();
+    let finalized = postprocess::finalize_transcript(
+        &config,
+        transcript,
+        rewrite_service.as_ref(),
+        Some(&injection_context),
+        recent_session.as_ref(),
+    )
+    .await;
+    tracing::info!(
+        elapsed_ms = finalize_started.elapsed().as_millis(),
+        output_chars = finalized.text.len(),
+        operation = match finalized.operation {
+            postprocess::FinalizedOperation::Append => "append",
+            postprocess::FinalizedOperation::ReplaceLastEntry { .. } => "replace_last_entry",
+        },
+        rewrite_used = finalized.rewrite_summary.rewrite_used,
+        "post-processing stage finished"
+    );
 
-    if text.is_empty() {
+    if finalized.text.is_empty() {
         tracing::warn!("post-processing produced empty text");
         // When the RMS/duration gates skip transcription, the process would
         // exit almost immediately after play_stop().  PipeWire may still be
@@ -97,17 +140,55 @@ pub async fn run(config: Config) -> Result<()> {
     }
 
     // Inject text
-    tracing::info!("injecting text: {text:?}");
+    tracing::info!("injecting text: {:?}", finalized.text);
     let injector = TextInjector::new();
-    injector.inject(&text).await?;
+    match finalized.operation {
+        postprocess::FinalizedOperation::Append => {
+            injector.inject(&finalized.text).await?;
+            if session_enabled {
+                session::record_append(
+                    &config.session,
+                    &injection_context,
+                    &finalized.text,
+                    finalized.rewrite_summary,
+                )?;
+            }
+        }
+        postprocess::FinalizedOperation::ReplaceLastEntry {
+            entry_id,
+            delete_graphemes,
+        } => {
+            injector
+                .replace_recent_text(delete_graphemes, &finalized.text)
+                .await?;
+            if session_enabled {
+                session::record_replace(
+                    &config.session,
+                    &injection_context,
+                    entry_id,
+                    &finalized.text,
+                    finalized.rewrite_summary,
+                )?;
+            }
+        }
+    }
 
     tracing::info!("done");
+    tracing::info!(
+        total_elapsed_ms = activation_started.elapsed().as_millis(),
+        "dictation pipeline finished"
+    );
     Ok(())
 }
 
 #[cfg(feature = "osd")]
 fn spawn_osd() -> Option<Child> {
-    let osd_path = crate::branding::resolve_sidecar_executable(&[crate::branding::OSD_BINARY]);
+    // Look for whispers-osd next to our own binary first, then fall back to PATH
+    let osd_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|dir| dir.join("whispers-osd")))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| "whispers-osd".into());
 
     match Command::new(&osd_path).spawn() {
         Ok(child) => {

@@ -1,24 +1,25 @@
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, get_lang_str,
 };
 
-use crate::config::WhisperConfig;
+use crate::config::TranscriptionConfig;
 use crate::error::{Result, WhsprError};
 
 pub trait TranscriptionBackend: Send + Sync {
     fn transcribe(&self, audio: &[f32], sample_rate: u32) -> Result<Transcript>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Transcript {
     pub raw_text: String,
     pub detected_language: Option<String>,
     pub segments: Vec<TranscriptSegment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptSegment {
     pub text: String,
     pub start_ms: u32,
@@ -65,7 +66,7 @@ pub struct WhisperLocal {
 }
 
 impl WhisperLocal {
-    pub fn new(config: &WhisperConfig, model_path: &Path) -> Result<Self> {
+    pub fn new(config: &TranscriptionConfig, model_path: &Path) -> Result<Self> {
         if !model_path.exists() {
             return Err(WhsprError::Transcription(format!(
                 "model file not found: {}",
@@ -95,7 +96,7 @@ impl WhisperLocal {
             .map_err(|e| {
                 if config.use_gpu {
                     WhsprError::Transcription(format!(
-                        "failed to load whisper model with GPU enabled: {e}. Set [whisper].use_gpu = false to force CPU."
+                        "failed to load whisper model with GPU enabled: {e}. Set [transcription].use_gpu = false to force CPU."
                     ))
                 } else {
                     WhsprError::Transcription(format!("failed to load whisper model: {e}"))
@@ -113,6 +114,7 @@ impl WhisperLocal {
 
 const CHUNK_DURATION_SECS: f64 = 30.0;
 const OVERLAP_SECS: f64 = 1.0;
+const WHISPER_GREEDY_BEST_OF: i32 = 3;
 
 /// Minimum RMS energy to consider audio as containing speech (~-40 dBFS).
 const MIN_RMS_THRESHOLD: f32 = 0.01;
@@ -192,7 +194,9 @@ impl TranscriptionBackend for WhisperLocal {
 
 impl WhisperLocal {
     fn transcribe_chunk(&self, audio: &[f32]) -> Result<Transcript> {
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let mut params = FullParams::new(SamplingStrategy::Greedy {
+            best_of: WHISPER_GREEDY_BEST_OF,
+        });
 
         if self.language == "auto" {
             params.set_language(None);

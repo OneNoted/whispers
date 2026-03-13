@@ -1,9 +1,9 @@
 # whispers
 
-Fast, local speech-to-text dictation for Wayland with optional advanced local rewrite cleanup.
+Fast speech-to-text dictation for Wayland with local-first ASR and optional cloud ASR/rewrite backends.
 Press a key to start recording, press it again to transcribe and paste.
 
-Runs [whisper.cpp](https://github.com/ggerganov/whisper.cpp) locally — your audio never leaves your machine.
+Local mode keeps all inference on your machine. Optional cloud modes can offload ASR, rewrite, or both when configured.
 
 Inspired by [hyprwhspr](https://github.com/goodroot/hyprwhspr) by goodroot.
 
@@ -15,7 +15,7 @@ Inspired by [hyprwhspr](https://github.com/goodroot/hyprwhspr) by goodroot.
 
 1. Bind `whispers` to a key in your compositor
 2. First press starts recording (OSD overlay shows audio visualization)
-3. Second press stops recording, transcribes with Whisper, and pastes via `Ctrl+Shift+V`
+3. Second press stops recording, transcribes, and pastes via `Ctrl+Shift+V`
 
 The two invocations communicate via PID file + `SIGUSR1` — no daemon, no IPC server.
 
@@ -23,13 +23,17 @@ The two invocations communicate via PID file + `SIGUSR1` — no daemon, no IPC s
 
 `whispers` now has two main dictation modes:
 
-- `raw` keeps output close to the Whisper transcript and is the default
-- `advanced_local` runs a second local GGUF rewrite model after Whisper for smarter cleanup and self-correction
+- `raw` keeps output close to the direct transcription result and is the default
+- `advanced_local` enables the smart rewrite pipeline after transcription; `[rewrite].backend` chooses whether that rewrite runs locally or in the cloud
 
-The rewrite path is managed by `whispers` itself through an internal helper binary installed alongside the main executable, so there is no separate tool or daemon to install manually.
+The older heuristic cleanup path is still available as deprecated `legacy_basic` for existing configs that already use `[cleanup]`.
+The local rewrite path is managed by `whispers` itself through an internal helper binary installed alongside the main executable, so there is no separate tool or daemon to install manually.
+When `advanced_local` is enabled with `rewrite.backend = "local"`, `whispers` keeps a hidden rewrite worker warm for a short idle window so repeated dictation is much faster without becoming a permanent background daemon.
 Managed rewrite models are the default path. If you point `rewrite.model_path` at your own GGUF, it should be a chat-capable model with an embedded template that `llama.cpp` can apply at runtime.
+Deterministic personalization rules apply in all modes: dictionary replacements, spoken snippets, and optional append-only custom rewrite instructions for `advanced_local`.
+Cloud ASR and cloud rewrite are both optional. Local remains the default.
 
-For file transcription, `whispers transcribe --raw <file>` always prints the plain Whisper transcript without any post-processing.
+For file transcription, `whispers transcribe --raw <file>` always prints the plain ASR transcript without any post-processing.
 
 ## Requirements
 
@@ -38,7 +42,9 @@ For file transcription, `whispers transcribe --raw <file>` always prints the pla
 - `wl-copy` (from `wl-clipboard`)
 - `uinput` access (for virtual keyboard paste)
 - NVIDIA GPU + CUDA toolkit (optional, for GPU acceleration)
-- If no compatible GPU is available, set `whisper.use_gpu = false` in config
+- `python3` on `PATH` if you want to use the optional `faster-whisper` backend
+- `python3.10`, `python3.11`, or `python3.12` on `PATH` if you want to use the experimental NeMo backends
+- If no compatible GPU is available, set `transcription.use_gpu = false` in config
 
 ## Install
 
@@ -57,32 +63,51 @@ cargo install --git https://github.com/OneNoted/whispers --no-default-features -
 
 ### Setup
 
-Run the interactive setup wizard to download a Whisper model, generate config, and optionally enable managed advanced dictation:
+Run the interactive setup wizard to download a local ASR model, generate config, and optionally enable local or cloud advanced dictation. Recommended local models are shown first, and experimental backends like Parakeet are called out explicitly before you opt into them:
 
 ```sh
 whispers setup
 ```
 
-Use a custom config file for any command (including `setup` and `model`):
+Normal runs keep output concise. Add `-v` when you want detailed diagnostic logs during setup, downloads, or dictation.
+
+Use a custom config file for any command (including `setup` and `asr-model`):
 
 ```sh
 whispers --config /path/to/config.toml setup
-whispers --config /path/to/config.toml model select tiny
+whispers --config /path/to/config.toml asr-model select tiny
 ```
 
-Or manage models manually:
+Or manage ASR models manually:
 
 ```sh
-whispers model list          # show available models
+whispers asr-model list
+whispers asr-model download large-v3-turbo
+whispers asr-model select large-v3-turbo
+whispers asr-model download distil-large-v3.5
+whispers asr-model select distil-large-v3.5
+# Experimental NeMo path:
+whispers asr-model download parakeet-tdt_ctc-1.1b
+whispers asr-model select parakeet-tdt_ctc-1.1b
+
+# Legacy whisper_cpp-only aliases still work for one release:
+whispers model list
 whispers model download large-v3-turbo
 whispers model select large-v3-turbo
 
 whispers rewrite-model list
-whispers rewrite-model download llama-3.2-3b-q4_k_m
-whispers rewrite-model select llama-3.2-3b-q4_k_m
+whispers rewrite-model download qwen-3.5-4b-q4_k_m
+whispers rewrite-model select qwen-3.5-4b-q4_k_m
+whispers cloud check
+
+whispers dictionary add "wisper flow" "Wispr Flow"
+whispers dictionary list
+whispers snippets add signature "Best regards,\nNotes"
+whispers snippets list
+whispers rewrite-instructions-path
 ```
 
-That still remains a single install: `whispers` manages both the Whisper model and the optional rewrite worker/model from the same binary package.
+That still remains a single install: `whispers` manages local ASR models, the optional local rewrite worker/model, and the optional cloud configuration from the same package. `faster-whisper` is bootstrapped into a hidden managed runtime when you download or prewarm that backend.
 
 ## Shell completions
 
@@ -141,21 +166,60 @@ Config lives at `~/.config/whispers/config.toml` by default. Generated automatic
 device = ""            # empty = system default
 sample_rate = 16000
 
-[whisper]
+[transcription]
+backend = "whisper_cpp"  # or "faster_whisper" / "nemo" / "cloud"
+fallback = "configured_local"  # or "none"
+local_backend = "whisper_cpp"
+selected_model = "large-v3-turbo"
 model_path = "~/.local/share/whispers/ggml-large-v3-turbo.bin"
 language = "auto"      # or "en", "fr", "de", etc.
 use_gpu = true         # set false to force CPU
 flash_attn = true      # only used when use_gpu=true
+idle_timeout_ms = 120000
 
 [postprocess]
-mode = "raw"           # or "advanced_local"
+mode = "raw"           # or "advanced_local"; deprecated: "legacy_basic"
+
+[session]
+enabled = true
+max_entries = 3
+max_age_ms = 8000
+max_replace_graphemes = 400
+
+[personalization]
+dictionary_path = "~/.local/share/whispers/dictionary.toml"
+snippets_path = "~/.local/share/whispers/snippets.toml"
+snippet_trigger = "insert"
 
 [rewrite]
-selected_model = "llama-3.2-3b-q4_k_m"
+backend = "local"      # or "cloud"
+fallback = "local"     # or "none"
+selected_model = "qwen-3.5-4b-q4_k_m"
 model_path = ""        # optional manual GGUF path override
+instructions_path = "~/.local/share/whispers/rewrite-instructions.txt"
+profile = "auto"       # or "qwen", "generic", "llama_compat"
 timeout_ms = 30000
+idle_timeout_ms = 120000
 max_output_chars = 1200
 max_tokens = 256
+
+[cloud]
+provider = "openai"    # or "openai_compatible"
+base_url = ""          # required for openai_compatible
+api_key = ""           # optional direct API key; leave empty to use api_key_env
+api_key_env = "OPENAI_API_KEY"
+connect_timeout_ms = 3000
+request_timeout_ms = 15000
+
+[cloud.transcription]
+model = "gpt-4o-mini-transcribe"
+language_mode = "inherit_local"  # or "force"
+language = ""
+
+[cloud.rewrite]
+model = "gpt-4.1-mini"
+temperature = 0.1
+max_output_tokens = 256
 
 [feedback]
 enabled = true
@@ -163,7 +227,35 @@ start_sound = ""       # empty = bundled sound
 stop_sound = ""
 ```
 
-## Models
+When `advanced_local` is enabled, `whispers` also keeps a short-lived local session ledger in the runtime directory so immediate follow-up corrections like `scratch that` can safely replace the most recent dictation entry when focus has not changed. That session behavior is local either way; only the semantic rewrite stage may be cloud-backed.
+
+## Cloud Modes
+
+- `transcription.backend = "cloud"` uploads recorded audio to the configured provider for ASR.
+- `rewrite.backend = "cloud"` uploads transcript/context JSON to the configured provider for semantic cleanup.
+- `transcription.fallback = "configured_local"` keeps a local ASR fallback path.
+- `rewrite.fallback = "local"` keeps a local rewrite fallback path.
+- Use either `cloud.api_key_env` or `cloud.api_key`. `setup` accepts either an env var name or a pasted key.
+
+Use `whispers cloud check` to validate cloud config, API key resolution, and basic provider connectivity.
+
+## Managed ASR models
+
+`whispers` currently ships managed local ASR entries across two backend families:
+
+| Model | Backend | Scope | Notes |
+|-------|---------|-------|-------|
+| large-v3-turbo | whisper_cpp | Multilingual | Default path |
+| large-v3 | whisper_cpp | Multilingual | Slower, higher accuracy |
+| medium / small / base / tiny | whisper_cpp | Multilingual | Smaller/faster tradeoffs |
+| *.en variants | whisper_cpp | English only | Smaller English Whisper options |
+| distil-large-v3.5 | faster_whisper | English only | Fast English option |
+| parakeet-tdt_ctc-1.1b | nemo | English only | Experimental NeMo ASR benchmark path |
+| canary-qwen-2.5b | nemo | English only | Experimental NeMo ASR/LLM hybrid (currently blocked) |
+
+`large-v3-turbo` remains the default multilingual local model. `distil-large-v3.5` is the speed-focused English option on the optional `faster-whisper` backend. `parakeet-tdt_ctc-1.1b` is kept as an experimental English-only NeMo backend for benchmarking against Whisper-family models, not as the default recommendation. Its first warm-up can be much slower than steady-state dictation, so judge it on warm use rather than the first cold start. `canary-qwen-2.5b` remains listed for evaluation, but the managed path is currently blocked by an upstream NeMo/PEFT initialization incompatibility. Cloud ASR models are configured under `[cloud.transcription]` instead of being downloaded locally.
+
+## Whisper Models
 
 | Model | Size | Speed | Notes |
 |-------|------|-------|-------|
@@ -173,20 +265,57 @@ stop_sound = ""
 | small / small.en | 488 MB | Very fast | Good for English-only |
 | tiny / tiny.en | 78 MB | Instant | Least accurate |
 
-Models are downloaded from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) and stored in `~/.local/share/whispers/`.
+Whisper.cpp models are downloaded from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) and stored in `~/.local/share/whispers/`. The managed `faster-whisper` backend stores models and its Python runtime under the same XDG data directory.
 
 ## Managed rewrite models
 
-`advanced_local` uses a second local model for post-processing. The managed catalog currently includes:
+When `rewrite.backend = "local"`, `advanced_local` uses a second local model for post-processing. The managed local catalog currently includes:
 
 | Model | Size | Notes |
 |-------|------|-------|
-| llama-3.2-1b-q4_k_m | ~0.8 GB | Fallback for weaker hardware |
-| llama-3.2-3b-q4_k_m | ~2.0 GB | Recommended default |
-| llama-3.1-8b-q4_k_m | ~4.9 GB | Higher quality, heavier |
+| qwen-3.5-2b-q4_k_m | ~1.3 GB | Fallback for weaker hardware |
+| qwen-3.5-4b-q4_k_m | ~2.9 GB | Recommended default |
+| qwen-3.5-9b-q4_k_m | ~5.9 GB | Higher quality, heavier |
 
 If you want to tinker, set `rewrite.model_path` to a custom GGUF file. When `rewrite.model_path` is set, it overrides the managed selection.
+`rewrite.profile = "auto"` keeps the prompt/runtime model-aware without requiring manual tuning for managed models, and still falls back safely for custom GGUFs.
 Custom rewrite models should include a chat template that `llama.cpp` can read from the GGUF metadata; otherwise rewrite prompting will fail fast instead of silently producing bad output.
+
+## Personalization
+
+Dictionary replacements apply deterministically in both `raw` and `advanced_local`, with normalization for case and punctuation but no fuzzy matching. In `advanced_local`, dictionary replacements are applied before the rewrite model and again on the final output so exact names and product terms stay stable.
+
+Spoken snippets also work in all modes. By default, saying `insert <snippet name>` expands the configured snippet text verbatim after post-processing finishes, so the rewrite model cannot paraphrase it. Change the trigger phrase with `personalization.snippet_trigger`.
+
+Custom rewrite instructions live in a separate plain-text file referenced by `rewrite.instructions_path`. `whispers` appends that file to the built-in rewrite prompt for `advanced_local`, while still enforcing the same final-text-only output contract. The file is optional, and a missing file is ignored.
+
+## Faster Whisper
+
+`faster-whisper` is optional and intended for users who want the fastest English dictation path. The current managed model for it is `distil-large-v3.5`.
+
+Notes:
+- English dictation is the intended use case
+- if it fails at runtime and a local `large-v3-turbo` Whisper model is available, `whispers` falls back to `whisper_cpp`
+- `transcription.idle_timeout_ms = 0` keeps the hidden ASR worker warm indefinitely
+
+## Experimental NeMo backends
+
+`parakeet-tdt_ctc-1.1b` is available as an experimental English-only ASR option on a managed NeMo backend. `canary-qwen-2.5b` remains under evaluation, but the managed path is currently blocked by an upstream initialization issue.
+
+Notes:
+- they are intended for benchmarking and experimentation, not as the default recommendation
+- first warm-up can be much slower than steady-state dictation because the hidden worker and model need to come up
+- the first use bootstraps a hidden managed Python runtime under the XDG data directory
+- the runtime currently requires Python 3.10, 3.11, or 3.12 on `PATH`
+- model downloads are stored as prepared NeMo model directories instead of ggml files
+- if a NeMo backend fails at runtime and a local `large-v3-turbo` Whisper model is available, `whispers` falls back to `whisper_cpp`
+
+## Privacy
+
+- Local-only: no inference-time network traffic
+- Cloud ASR: audio leaves the machine for transcription
+- Cloud rewrite: transcript/context leaves the machine for rewrite
+- Cloud ASR + rewrite: both leave the machine
 
 ## uinput permissions
 
@@ -200,7 +329,7 @@ Then log out and back in.
 
 ## Acknowledgements
 
-This project is inspired by [hyprwhspr](https://github.com/goodroot/hyprwhspr) by [goodroot](https://github.com/goodroot), which provides native speech-to-text for Linux with support for multiple backends. whispers is a from-scratch Rust reimplementation focused on local-only Whisper transcription with minimal dependencies.
+This project is inspired by [hyprwhspr](https://github.com/goodroot/hyprwhspr) by [goodroot](https://github.com/goodroot), which provides native speech-to-text for Linux with support for multiple backends. whispers is a from-scratch Rust reimplementation focused on local-first dictation with minimal dependencies.
 
 ## License
 

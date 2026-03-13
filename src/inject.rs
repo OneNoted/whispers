@@ -6,6 +6,10 @@ use evdev::{AttributeSet, EventType, InputEvent, KeyCode};
 
 use crate::error::{Result, WhsprError};
 
+const DEVICE_READY_DELAY: Duration = Duration::from_millis(120);
+const CLIPBOARD_READY_DELAY: Duration = Duration::from_millis(180);
+const POST_DELETE_SETTLE_DELAY: Duration = Duration::from_millis(30);
+
 pub struct TextInjector {
     wl_copy_bin: String,
     wl_copy_args: Vec<String>,
@@ -44,33 +48,80 @@ impl TextInjector {
         tracing::info!("injected {} chars via wl-copy + Ctrl+Shift+V", text_len);
         Ok(())
     }
+
+    pub async fn replace_recent_text(&self, delete_graphemes: usize, text: &str) -> Result<()> {
+        if delete_graphemes == 0 {
+            return self.inject(text).await;
+        }
+
+        let text = text.to_string();
+        let wl_copy_bin = self.wl_copy_bin.clone();
+        let wl_copy_args = self.wl_copy_args.clone();
+        tokio::task::spawn_blocking(move || {
+            replace_recent_text_sync(&wl_copy_bin, &wl_copy_args, delete_graphemes, &text)
+        })
+        .await
+        .map_err(|e| WhsprError::Injection(format!("replace task panicked: {e}")))??;
+
+        tracing::info!(
+            "replaced {} graphemes via backspace + wl-copy paste",
+            delete_graphemes
+        );
+        Ok(())
+    }
 }
 
 fn inject_sync(wl_copy_bin: &str, wl_copy_args: &[String], text: &str) -> Result<()> {
-    // Create uinput device early so it registers with the compositor
-    // while wl-copy + clipboard delay run in parallel.
-    let mut keys = AttributeSet::<KeyCode>::new();
-    keys.insert(KeyCode::KEY_LEFTCTRL);
-    keys.insert(KeyCode::KEY_LEFTSHIFT);
-    keys.insert(KeyCode::KEY_V);
-
-    let mut device = VirtualDevice::builder()
-        .map_err(|e| WhsprError::Injection(format!("uinput: {e}")))?
-        .name(crate::branding::UINPUT_KEYBOARD_NAME)
-        .with_keys(&keys)
-        .map_err(|e| WhsprError::Injection(format!("uinput keys: {e}")))?
-        .build()
-        .map_err(|e| WhsprError::Injection(format!("uinput build: {e}")))?;
+    let mut device = build_virtual_device()?;
 
     run_wl_copy(wl_copy_bin, wl_copy_args, text)?;
 
     // Wait for compositor to process the clipboard offer.
     // The uinput device was created above, so it has already been
     // registering during the wl-copy write.
-    std::thread::sleep(Duration::from_millis(180));
+    std::thread::sleep(CLIPBOARD_READY_DELAY);
     emit_paste_combo(&mut device)?;
 
     Ok(())
+}
+
+fn replace_recent_text_sync(
+    wl_copy_bin: &str,
+    wl_copy_args: &[String],
+    delete_graphemes: usize,
+    text: &str,
+) -> Result<()> {
+    let mut device = build_virtual_device()?;
+    // Unlike plain injection, replacement can try to backspace immediately
+    // after creating the uinput device. Give the compositor a moment to
+    // register it first so the initial backspaces are not dropped.
+    std::thread::sleep(DEVICE_READY_DELAY);
+    emit_backspaces(&mut device, delete_graphemes)?;
+
+    if !text.is_empty() {
+        std::thread::sleep(POST_DELETE_SETTLE_DELAY);
+        run_wl_copy(wl_copy_bin, wl_copy_args, text)?;
+        std::thread::sleep(CLIPBOARD_READY_DELAY);
+        emit_paste_combo(&mut device)?;
+    }
+
+    Ok(())
+}
+
+fn build_virtual_device() -> Result<VirtualDevice> {
+    let mut keys = AttributeSet::<KeyCode>::new();
+    keys.insert(KeyCode::KEY_LEFTCTRL);
+    keys.insert(KeyCode::KEY_LEFTSHIFT);
+    keys.insert(KeyCode::KEY_V);
+    keys.insert(KeyCode::KEY_BACKSPACE);
+
+    VirtualDevice::builder()
+        .map_err(|e| WhsprError::Injection(format!("uinput: {e}")))?
+        .name("whispers-keyboard")
+        .with_keys(&keys)
+        .map_err(|e| WhsprError::Injection(format!("uinput keys: {e}")))?
+        .build()
+        .map_err(|e| WhsprError::Injection(format!("uinput build: {e}")))
 }
 
 fn run_wl_copy(wl_copy_bin: &str, wl_copy_args: &[String], text: &str) -> Result<()> {
@@ -151,6 +202,20 @@ fn emit_paste_combo(device: &mut VirtualDevice) -> Result<()> {
             InputEvent::new(EventType::KEY.0, KeyCode::KEY_LEFTCTRL.0, 0),
         ])
         .map_err(|e| WhsprError::Injection(format!("paste modifier release: {e}")))?;
+
+    Ok(())
+}
+
+fn emit_backspaces(device: &mut VirtualDevice, count: usize) -> Result<()> {
+    for _ in 0..count {
+        device
+            .emit(&[
+                InputEvent::new(EventType::KEY.0, KeyCode::KEY_BACKSPACE.0, 1),
+                InputEvent::new(EventType::KEY.0, KeyCode::KEY_BACKSPACE.0, 0),
+            ])
+            .map_err(|e| WhsprError::Injection(format!("backspace key press: {e}")))?;
+        std::thread::sleep(Duration::from_millis(6));
+    }
 
     Ok(())
 }

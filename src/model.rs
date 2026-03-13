@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use futures_util::StreamExt;
-use indicatif::{ProgressBar, ProgressStyle};
 use tokio::io::AsyncWriteExt;
 
-use crate::config::{self, data_dir, resolve_config_path, update_config_model_path};
+use crate::config::{
+    self, TranscriptionBackend, data_dir, resolve_config_path,
+    update_config_transcription_selection,
+};
 use crate::error::{Result, WhsprError};
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
@@ -99,6 +101,10 @@ fn model_path(filename: &str) -> PathBuf {
     data_dir().join(filename)
 }
 
+pub fn selected_model_local_path(name: &str) -> Option<PathBuf> {
+    find_model(name).map(|info| model_path(info.filename))
+}
+
 fn path_for_config(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
     if let Some(home_path) = home {
         if let Ok(stripped) = path.strip_prefix(home_path) {
@@ -121,7 +127,7 @@ fn active_model_path(config_path_override: Option<&Path>) -> Option<String> {
     }
     let contents = std::fs::read_to_string(&config_path).ok()?;
     let config: config::Config = toml::from_str(&contents).ok()?;
-    Some(config.whisper.model_path)
+    Some(config.transcription.model_path)
 }
 
 fn model_status(info: &ModelInfo, active_resolved: Option<&std::path::Path>) -> &'static str {
@@ -197,7 +203,7 @@ pub(crate) async fn download_model_from_base(name: &str, base_url: &str) -> Resu
 
     if dest.exists() {
         tracing::info!("model '{name}' already downloaded at {}", dest.display());
-        println!("Model '{}' already downloaded at {}", name, dest.display());
+        println!("{}", crate::ui::ready_message("ASR", name));
         return Ok(dest);
     }
 
@@ -210,7 +216,12 @@ pub(crate) async fn download_model_from_base(name: &str, base_url: &str) -> Resu
     let url = format!("{}/{}", base_url.trim_end_matches('/'), info.filename);
     tracing::info!("downloading model '{}' from {}", info.name, url);
 
-    println!("Downloading {} ({})...", info.name, info.size);
+    println!(
+        "{} Downloading ASR model {} ({})...",
+        crate::ui::info_label(),
+        crate::ui::value(info.name),
+        info.size
+    );
 
     let client = reqwest::Client::new();
 
@@ -224,7 +235,9 @@ pub(crate) async fn download_model_from_base(name: &str, base_url: &str) -> Resu
     let mut request = client.get(&url);
     if existing_len > 0 {
         tracing::info!("resuming model download from {existing_len} bytes");
-        println!("Resuming from {} bytes...", existing_len);
+        if crate::ui::is_verbose() {
+            println!("Resuming from {} bytes...", existing_len);
+        }
         request = request.header("Range", format!("bytes={}-", existing_len));
     }
 
@@ -237,7 +250,9 @@ pub(crate) async fn download_model_from_base(name: &str, base_url: &str) -> Resu
     existing_len = validated_existing_len(existing_len, response.status())?;
     if original_len > 0 && existing_len == 0 {
         tracing::warn!("server ignored range request, restarting model download from zero");
-        println!("Server ignored range request, restarting download from zero");
+        if crate::ui::is_verbose() {
+            println!("Server ignored range request, restarting download from zero");
+        }
     }
 
     let total_size = if existing_len > 0 {
@@ -250,13 +265,7 @@ pub(crate) async fn download_model_from_base(name: &str, base_url: &str) -> Resu
         response.content_length().unwrap_or(0)
     };
 
-    let pb = ProgressBar::new(total_size);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    let pb = crate::ui::progress_bar(total_size);
     pb.set_position(existing_len);
 
     let mut open_opts = tokio::fs::OpenOptions::new();
@@ -293,7 +302,7 @@ pub(crate) async fn download_model_from_base(name: &str, base_url: &str) -> Resu
         .map_err(|e| WhsprError::Download(format!("failed to finalize download: {e}")))?;
 
     tracing::info!("model '{}' saved to {}", info.name, dest.display());
-    println!("Saved to {}", dest.display());
+    println!("{}", crate::ui::ready_message("ASR", info.name));
     Ok(dest)
 }
 
@@ -318,7 +327,13 @@ pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<(
             config_path.display(),
             model_path_str
         );
-        update_config_model_path(&config_path, &model_path_str)?;
+        update_config_transcription_selection(
+            &config_path,
+            TranscriptionBackend::WhisperCpp,
+            info.name,
+            &model_path_str,
+            true,
+        )?;
     } else {
         tracing::info!(
             "writing new config {} with selected model {}",
@@ -326,10 +341,20 @@ pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<(
             model_path_str
         );
         config::write_default_config(&config_path, &model_path_str)?;
+        update_config_transcription_selection(
+            &config_path,
+            TranscriptionBackend::WhisperCpp,
+            info.name,
+            &model_path_str,
+            true,
+        )?;
     }
 
-    println!("Selected model '{}' as active.", name);
-    println!("Config updated: {}", config_path.display());
+    println!(
+        "{} Active ASR model: {}",
+        crate::ui::ok_label(),
+        crate::ui::value(name)
+    );
     Ok(())
 }
 
@@ -454,7 +479,7 @@ mod tests {
 
         let loaded = Config::load(Some(&config_path)).expect("load selected config");
         assert_eq!(
-            loaded.whisper.model_path,
+            loaded.transcription.model_path,
             "~/.local/share/whispers/ggml-tiny.bin"
         );
     }

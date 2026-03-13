@@ -12,7 +12,7 @@ exclude = [".jj/", ".git/", "target/"]
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "io-util", "process"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "io-util", "net", "process"] }
 
 # Audio capture
 cpal = "0.17"
@@ -32,6 +32,9 @@ serde = { version = "1", features = ["derive"] }
 encoding_rs = "0.8"
 serde_json = "1"
 toml = "0.9"
+base64 = "0.22"
+unicode-segmentation = "1.12"
+flacenc = { version = "0.5.1", default-features = false }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -49,11 +52,12 @@ thiserror = "2"
 libc = "0.2"
 
 # Model downloading and management
-reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls", "json", "multipart"] }
 indicatif = "0.18"
 futures-util = "0.3"
 toml_edit = "0.23"
 dialoguer = { version = "0.12", default-features = false }
+console = "0.16"
 
 # OSD overlay (whispers-osd binary) — wayland-native, no GTK
 wayland-client = { version = "0.31", optional = true }

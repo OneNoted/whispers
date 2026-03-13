@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -63,5 +63,5 @@ jobs:
           if command -v nvcc >/dev/null 2>&1; then
             cargo check --no-default-features --features cuda
           else
-            echo "::warning::CUDA toolkit not available on this runner - skipping cuda feature check"
+            echo "CUDA toolkit not available on this runner; skipping cuda feature check"
           fi

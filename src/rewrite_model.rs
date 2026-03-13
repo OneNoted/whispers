@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use futures_util::StreamExt;
-use indicatif::{ProgressBar, ProgressStyle};
 use tokio::io::AsyncWriteExt;
 
-use crate::config::{self, data_dir, resolve_config_path, update_config_rewrite_selection};
+use crate::config::{
+    self, RewriteBackend, data_dir, resolve_config_path, update_config_rewrite_selection,
+};
 use crate::error::{Result, WhsprError};
+use crate::rewrite_profile::RewriteProfile;
 
 pub struct RewriteModelInfo {
     pub name: &'static str,
@@ -13,34 +15,47 @@ pub struct RewriteModelInfo {
     pub size: &'static str,
     pub description: &'static str,
     pub url: &'static str,
+    pub profile: RewriteProfile,
 }
 
 pub const REWRITE_MODELS: &[RewriteModelInfo] = &[
     RewriteModelInfo {
-        name: "llama-3.2-1b-q4_k_m",
-        filename: "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-        size: "~0.8 GB",
+        name: "qwen-3.5-2b-q4_k_m",
+        filename: "Qwen_Qwen3.5-2B-Q4_K_M.gguf",
+        size: "~1.3 GB",
         description: "Fallback for weaker hardware",
-        url: "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+        url: "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen_Qwen3.5-2B-Q4_K_M.gguf",
+        profile: RewriteProfile::Qwen,
     },
     RewriteModelInfo {
-        name: "llama-3.2-3b-q4_k_m",
-        filename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-        size: "~2.0 GB",
+        name: "qwen-3.5-4b-q4_k_m",
+        filename: "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+        size: "~2.9 GB",
         description: "Recommended balance for advanced_local mode",
-        url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        url: "https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/main/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+        profile: RewriteProfile::Qwen,
     },
     RewriteModelInfo {
-        name: "llama-3.1-8b-q4_k_m",
-        filename: "Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-        size: "~4.9 GB",
+        name: "qwen-3.5-9b-q4_k_m",
+        filename: "Qwen_Qwen3.5-9B-Q4_K_M.gguf",
+        size: "~5.9 GB",
         description: "High-end optional model",
-        url: "https://huggingface.co/bartowski/Llama-3.1-8B-Instruct-GGUF/resolve/main/Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        url: "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/Qwen_Qwen3.5-9B-Q4_K_M.gguf",
+        profile: RewriteProfile::Qwen,
     },
 ];
 
 pub fn find_model(name: &str) -> Option<&'static RewriteModelInfo> {
     REWRITE_MODELS.iter().find(|m| m.name == name)
+}
+
+pub fn setup_label(info: &RewriteModelInfo) -> String {
+    format!(
+        "{}  {}  {}",
+        crate::ui::value(format!("{:<24}", info.name)),
+        crate::ui::size_token(format!("{:>9}", info.size)),
+        crate::ui::description_token(info.description)
+    )
 }
 
 pub fn selected_model_path(name: &str) -> Option<PathBuf> {
@@ -49,6 +64,10 @@ pub fn selected_model_path(name: &str) -> Option<PathBuf> {
 
 fn model_path(filename: &str) -> PathBuf {
     data_dir().join("rewrite").join(filename)
+}
+
+pub fn managed_profile(name: &str) -> Option<RewriteProfile> {
+    find_model(name).map(|info| info.profile)
 }
 
 fn active_model_name(config_path_override: Option<&Path>) -> Option<String> {
@@ -90,7 +109,11 @@ pub fn list_models(config_path_override: Option<&Path>) {
         };
         println!(
             "{}{:<22} {:>9}  {:<8}  {}",
-            marker, model.name, model.size, status, model.description
+            marker,
+            model.name,
+            crate::ui::size_token(format!("{:>9}", model.size)),
+            crate::ui::status_token(format!("{:<8}", status)),
+            model.description
         );
     }
 }
@@ -118,11 +141,7 @@ pub async fn download_model_with_url(info: &RewriteModelInfo, url: &str) -> Resu
             info.name,
             dest.display()
         );
-        println!(
-            "Rewrite model '{}' already downloaded at {}",
-            info.name,
-            dest.display()
-        );
+        println!("{}", crate::ui::ready_message("Rewrite", info.name));
         return Ok(dest);
     }
 
@@ -132,7 +151,12 @@ pub async fn download_model_with_url(info: &RewriteModelInfo, url: &str) -> Resu
     }
 
     tracing::info!("downloading rewrite model '{}' from {}", info.name, url);
-    println!("Downloading {} ({})...", info.name, info.size);
+    println!(
+        "{} Downloading rewrite model {} ({})...",
+        crate::ui::info_label(),
+        crate::ui::value(info.name),
+        info.size
+    );
 
     let client = reqwest::Client::new();
     let response = client
@@ -149,13 +173,7 @@ pub async fn download_model_with_url(info: &RewriteModelInfo, url: &str) -> Resu
     }
 
     let total_size = response.content_length().unwrap_or(0);
-    let pb = ProgressBar::new(total_size);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    let pb = crate::ui::progress_bar(total_size);
 
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
@@ -186,7 +204,7 @@ pub async fn download_model_with_url(info: &RewriteModelInfo, url: &str) -> Resu
         .map_err(|e| WhsprError::Download(format!("failed to finalize download: {e}")))?;
 
     tracing::info!("rewrite model '{}' saved to {}", info.name, dest.display());
-    println!("Saved to {}", dest.display());
+    println!("{}", crate::ui::ready_message("Rewrite", info.name));
     Ok(dest)
 }
 
@@ -204,14 +222,26 @@ pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<(
 
     let config_path = resolve_config_path(config_path_override);
     if !config_path.exists() {
-        let whisper_model = config::Config::default().whisper.model_path;
+        let whisper_model = config::Config::default().transcription.model_path;
         config::write_default_config(&config_path, &whisper_model)?;
     }
 
     update_config_rewrite_selection(&config_path, info.name)?;
+    if config::Config::load(Some(&config_path))
+        .map(|config| config.rewrite.backend == RewriteBackend::Cloud)
+        .unwrap_or(false)
+    {
+        println!(
+            "{} Kept cloud rewrite enabled and updated the local fallback model.",
+            crate::ui::info_label()
+        );
+    }
 
-    println!("Selected rewrite model '{}' as active.", name);
-    println!("Config updated: {}", config_path.display());
+    println!(
+        "{} Active rewrite model: {}",
+        crate::ui::ok_label(),
+        crate::ui::value(name)
+    );
     Ok(())
 }
 
@@ -223,8 +253,8 @@ mod tests {
 
     #[test]
     fn selected_model_path_uses_known_catalog_entry() {
-        let path = selected_model_path("llama-3.2-3b-q4_k_m").expect("catalog entry");
-        assert!(path.ends_with("Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
+        let path = selected_model_path("qwen-3.5-4b-q4_k_m").expect("catalog entry");
+        assert!(path.ends_with("Qwen_Qwen3.5-4B-Q4_K_M.gguf"));
     }
 
     #[test]
@@ -235,7 +265,7 @@ mod tests {
         crate::test_support::set_env("HOME", &home.to_string_lossy());
         crate::test_support::remove_env("XDG_DATA_HOME");
 
-        let info = find_model("llama-3.2-3b-q4_k_m").expect("model exists");
+        let info = find_model("qwen-3.5-4b-q4_k_m").expect("model exists");
         assert_eq!(model_status(info, Some(info.name)), "active (missing)");
     }
 
@@ -247,7 +277,7 @@ mod tests {
         crate::test_support::set_env("HOME", &home.to_string_lossy());
         crate::test_support::remove_env("XDG_DATA_HOME");
 
-        let info = find_model("llama-3.2-1b-q4_k_m").expect("model exists");
+        let info = find_model("qwen-3.5-2b-q4_k_m").expect("model exists");
         let model_file = home
             .join(".local")
             .join("share")
@@ -261,10 +291,10 @@ mod tests {
         crate::config::write_default_config(&config_path, "~/.local/share/whispers/ggml.bin")
             .expect("write config");
 
-        select_model("llama-3.2-1b-q4_k_m", Some(&config_path)).expect("select model");
+        select_model("qwen-3.5-2b-q4_k_m", Some(&config_path)).expect("select model");
         let loaded = Config::load(Some(&config_path)).expect("load config");
         assert_eq!(loaded.postprocess.mode, PostprocessMode::AdvancedLocal);
-        assert_eq!(loaded.rewrite.selected_model, "llama-3.2-1b-q4_k_m");
+        assert_eq!(loaded.rewrite.selected_model, "qwen-3.5-2b-q4_k_m");
     }
 
     #[test]
@@ -279,7 +309,7 @@ mod tests {
         crate::config::write_default_config(&config_path, "~/.local/share/whispers/ggml.bin")
             .expect("write config");
 
-        let err = select_model("llama-3.2-1b-q4_k_m", Some(&config_path))
+        let err = select_model("qwen-3.5-2b-q4_k_m", Some(&config_path))
             .expect_err("missing rewrite model should error");
         match err {
             WhsprError::Rewrite(message) => {
@@ -297,7 +327,7 @@ mod tests {
         crate::test_support::set_env("HOME", &home.to_string_lossy());
         crate::test_support::remove_env("XDG_DATA_HOME");
 
-        let info = find_model("llama-3.2-1b-q4_k_m").expect("model exists");
+        let info = find_model("qwen-3.5-2b-q4_k_m").expect("model exists");
         let server = MockServer::start();
         let download = server.mock(|when, then| {
             when.method(GET).path("/rewrite.gguf");
@@ -318,6 +348,14 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&result).expect("read final model"),
             "gguf123"
+        );
+    }
+
+    #[test]
+    fn managed_profile_uses_catalog_profile() {
+        assert_eq!(
+            managed_profile("qwen-3.5-4b-q4_k_m"),
+            Some(RewriteProfile::Qwen)
         );
     }
 }

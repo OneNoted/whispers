@@ -9,14 +9,24 @@
 [audio]
 # Input device name (empty = system default)
 device = ""
-# Sample rate in Hz (whisper requires 16000)
+# Sample rate in Hz (ASR expects 16000)
 sample_rate = 16000
 
-[whisper]
-# Path to ggml whisper model file
-# Recommended: large-v3-turbo (best accuracy/speed tradeoff, 1.6GB)
-# Alternatives: ggml-large-v3.bin (most accurate, 6x slower)
-#               ggml-large-v3-turbo-q5_0.bin (quantized, 574MB, slightly less accurate)
+[transcription]
+# Active transcription backend ("whisper_cpp", "faster_whisper", "nemo", or "cloud")
+# "nemo" is experimental and intended for benchmarking rather than the default recommendation.
+backend = "whisper_cpp"
+# Cloud failure policy ("configured_local" or "none")
+fallback = "configured_local"
+# Local backend used directly in local mode and as the cloud fallback backend
+local_backend = "whisper_cpp"
+# Managed ASR model name for the local backend.
+# Recommended defaults: "large-v3-turbo" for multilingual local use,
+# "distil-large-v3.5" for faster English-only local use.
+selected_model = "large-v3-turbo"
+# Local backend model path. Leave empty to use the managed selection.
+# Experimental NeMo models are managed as prepared model directories, not ggml files.
+# Their first warm-up can be much slower than steady-state dictation.
 model_path = "~/.local/share/whispers/ggml-large-v3-turbo.bin"
 # Language code ("en", "fr", "de", etc.)
 language = "auto"
@@ -24,24 +34,87 @@ language = "auto"
 use_gpu = true
 # Enable flash attention when GPU is enabled
 flash_attn = true
+# How long the hidden ASR worker stays warm without requests (0 = never expire)
+# Experimental NeMo models usually feel best with a warm worker.
+idle_timeout_ms = 120000
 
 [postprocess]
 # "raw" keeps output close to Whisper, "advanced_local" enables the rewrite model
+# "legacy_basic" is deprecated and only kept for older cleanup-based configs
 mode = "raw"
 
+[session]
+# Enable short-lived session backtracking in advanced_local mode
+enabled = true
+# How many recent dictation entries to keep in the runtime session ledger
+max_entries = 3
+# How long a recent dictation entry stays eligible for revision
+max_age_ms = 8000
+# Maximum graphemes that may be deleted when revising the latest entry
+max_replace_graphemes = 400
+
+[personalization]
+# Dictionary replacements applied in all modes
+dictionary_path = "~/.local/share/whispers/dictionary.toml"
+# Snippets expanded via an explicit spoken trigger
+snippets_path = "~/.local/share/whispers/snippets.toml"
+# Spoken trigger phrase used before snippet names
+snippet_trigger = "insert"
+
 [rewrite]
+# Rewrite backend ("local" or "cloud")
+backend = "local"
+# Cloud rewrite failure policy ("local" or "none")
+fallback = "local"
 # Managed rewrite model name for advanced_local mode
-selected_model = "llama-3.2-3b-q4_k_m"
+selected_model = "qwen-3.5-4b-q4_k_m"
 # Manual GGUF path override (empty = use selected managed model)
 # Custom rewrite models should be chat-capable GGUFs with an embedded
 # chat template that llama.cpp can apply at runtime.
 model_path = ""
+# Optional plain-text file with extra rewrite instructions appended to the
+# built-in system prompt. Missing files are ignored.
+instructions_path = "~/.local/share/whispers/rewrite-instructions.txt"
+# Rewrite profile selection ("auto", "qwen", "generic", or "llama_compat")
+profile = "auto"
 # Timeout for local rewrite inference in milliseconds
 timeout_ms = 30000
+# How long the hidden rewrite worker stays warm without requests (0 = never expire)
+idle_timeout_ms = 120000
 # Maximum characters accepted from the rewrite model
 max_output_chars = 1200
 # Maximum tokens to generate for rewritten output
 max_tokens = 256
+
+[cloud]
+# Cloud provider ("openai" or "openai_compatible")
+provider = "openai"
+# Base URL for openai_compatible providers. Leave empty for OpenAI.
+base_url = ""
+# Optional API key stored directly in the config (empty = use api_key_env instead)
+api_key = ""
+# Environment variable holding the API key
+api_key_env = "OPENAI_API_KEY"
+# Network connect timeout in milliseconds
+connect_timeout_ms = 3000
+# End-to-end request timeout in milliseconds
+request_timeout_ms = 15000
+
+[cloud.transcription]
+# Cloud transcription model
+model = "gpt-4o-mini-transcribe"
+# "inherit_local" uses [transcription].language when it is not "auto"
+# "force" uses the value below instead
+language_mode = "inherit_local"
+language = ""
+
+[cloud.rewrite]
+# Cloud rewrite model
+model = "gpt-4.1-mini"
+# Sampling temperature for cloud rewrite
+temperature = 0.1
+# Maximum tokens requested from the cloud rewrite backend
+max_output_tokens = 256
 
 [feedback]
 # Play sound feedback on start/stop
