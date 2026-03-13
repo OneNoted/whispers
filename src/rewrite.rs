@@ -1,278 +1,25 @@
-use std::num::NonZeroU32;
-use std::path::Path;
-use std::sync::OnceLock;
-
-use encoding_rs::UTF_8;
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
-use llama_cpp_2::openai::OpenAIChatTemplateParams;
-use llama_cpp_2::sampling::LlamaSampler;
 use serde_json::json;
 
 use crate::rewrite_profile::ResolvedRewriteProfile;
 use crate::rewrite_profile::RewriteProfile;
 use crate::rewrite_protocol::RewriteTranscript;
 
+const LEGACY_REWRITE_MAX_TOKENS: usize = 256;
+const RECOMMENDED_REWRITE_MAX_TOKENS: usize = 768;
 #[allow(dead_code)]
-pub struct LocalRewriter {
-    model: LlamaModel,
-    chat_template: LlamaChatTemplate,
-    profile: ResolvedRewriteProfile,
-    max_tokens: usize,
-    max_output_chars: usize,
-}
-
+const LEGACY_REWRITE_MAX_OUTPUT_CHARS: usize = 1200;
 #[allow(dead_code)]
-static LLAMA_BACKEND: OnceLock<&'static LlamaBackend> = OnceLock::new();
-#[allow(dead_code)]
-static EXTERNAL_LLAMA_BACKEND: LlamaBackend = LlamaBackend {};
+const RECOMMENDED_REWRITE_MAX_OUTPUT_CHARS: usize = 8192;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RewritePrompt {
     pub system: String,
     pub user: String,
 }
-
-impl LocalRewriter {
-    #[allow(dead_code)]
-    pub fn new(
-        model_path: &Path,
-        profile: ResolvedRewriteProfile,
-        max_tokens: usize,
-        max_output_chars: usize,
-    ) -> std::result::Result<Self, String> {
-        if !model_path.exists() {
-            return Err(format!(
-                "rewrite model file not found: {}",
-                model_path.display()
-            ));
-        }
-
-        let backend = llama_backend()?;
-
-        let mut model_params = LlamaModelParams::default();
-        if cfg!(feature = "cuda") {
-            model_params = model_params.with_n_gpu_layers(1000);
-        }
-
-        let model = LlamaModel::load_from_file(backend, model_path, &model_params)
-            .map_err(|e| format!("failed to load rewrite model: {e}"))?;
-        let chat_template = model
-            .chat_template(None)
-            .map_err(|e| format!("rewrite model does not expose a usable chat template: {e}"))?;
-
-        Ok(Self {
-            model,
-            chat_template,
-            profile,
-            max_tokens,
-            max_output_chars,
-        })
-    }
-
-    #[allow(dead_code)]
-    pub fn rewrite_with_instructions(
-        &self,
-        transcript: &RewriteTranscript,
-        custom_instructions: Option<&str>,
-    ) -> std::result::Result<String, String> {
-        if transcript.raw_text.trim().is_empty() {
-            return Ok(String::new());
-        }
-
-        let prompt = build_rewrite_prompt(
-            &self.model,
-            &self.chat_template,
-            transcript,
-            self.profile,
-            custom_instructions,
-        )?;
-        let effective_max_tokens = effective_max_tokens(self.max_tokens, transcript);
-        let prompt_tokens = self
-            .model
-            .str_to_token(&prompt, AddBos::Never)
-            .map_err(|e| format!("failed to tokenize rewrite prompt: {e}"))?;
-        let behavior = rewrite_behavior(self.profile);
-
-        let n_ctx_tokens = prompt_tokens
-            .len()
-            .saturating_add(effective_max_tokens)
-            .saturating_add(64)
-            .max(2048)
-            .min(u32::MAX as usize) as u32;
-        let n_batch = prompt_tokens
-            .len()
-            .max(512)
-            .min(n_ctx_tokens as usize)
-            .min(u32::MAX as usize) as u32;
-        let threads = std::thread::available_parallelism()
-            .map(|threads| threads.get())
-            .unwrap_or(4)
-            .clamp(1, i32::MAX as usize) as i32;
-
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(n_ctx_tokens))
-            .with_n_batch(n_batch)
-            .with_n_ubatch(n_batch)
-            .with_n_threads(threads)
-            .with_n_threads_batch(threads);
-        let backend = llama_backend()?;
-        let mut ctx = self
-            .model
-            .new_context(backend, ctx_params)
-            .map_err(|e| format!("failed to create rewrite context: {e}"))?;
-
-        let mut prompt_batch = LlamaBatch::new(prompt_tokens.len(), 1);
-        prompt_batch
-            .add_sequence(&prompt_tokens, 0, false)
-            .map_err(|e| format!("failed to enqueue rewrite prompt: {e}"))?;
-        ctx.decode(&mut prompt_batch)
-            .map_err(|e| format!("failed to decode rewrite prompt: {e}"))?;
-
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::top_k(behavior.top_k),
-            LlamaSampler::top_p(behavior.top_p, 1),
-            LlamaSampler::temp(behavior.temperature),
-            LlamaSampler::greedy(),
-        ]);
-        sampler.accept_many(prompt_tokens.iter());
-
-        let mut decoder = UTF_8.new_decoder_without_bom_handling();
-        let mut output = String::new();
-        let start_pos = i32::try_from(prompt_tokens.len()).unwrap_or(i32::MAX);
-
-        for i in 0..effective_max_tokens {
-            let mut candidates = ctx.token_data_array();
-            candidates.apply_sampler(&sampler);
-            let token = candidates
-                .selected_token()
-                .ok_or_else(|| "rewrite sampler did not select a token".to_string())?;
-
-            if token == self.model.token_eos() {
-                break;
-            }
-
-            sampler.accept(token);
-
-            let piece = self
-                .model
-                .token_to_piece(token, &mut decoder, true, None)
-                .map_err(|e| format!("failed to decode rewrite token: {e}"))?;
-            output.push_str(&piece);
-
-            if output.contains("</output>") || output.len() >= self.max_output_chars {
-                break;
-            }
-
-            let mut batch = LlamaBatch::new(1, 1);
-            batch
-                .add(
-                    token,
-                    start_pos.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)),
-                    &[0],
-                    true,
-                )
-                .map_err(|e| format!("failed to enqueue rewrite token: {e}"))?;
-            ctx.decode(&mut batch)
-                .map_err(|e| format!("failed to decode rewrite token: {e}"))?;
-        }
-
-        let rewritten = sanitize_rewrite_output(&output);
-        if rewritten.is_empty() {
-            return Err("rewrite model returned empty output".into());
-        }
-
-        Ok(rewritten)
-    }
-}
-
 #[allow(dead_code)]
-fn llama_backend() -> std::result::Result<&'static LlamaBackend, String> {
-    if let Some(backend) = LLAMA_BACKEND.get().copied() {
-        return Ok(backend);
-    }
-
-    match LlamaBackend::init() {
-        Ok(backend) => {
-            let backend = Box::leak(Box::new(backend));
-            let _ = LLAMA_BACKEND.set(backend);
-            Ok(LLAMA_BACKEND
-                .get()
-                .copied()
-                .expect("llama backend initialized"))
-        }
-        // Use a static non-dropping token when another part of the process already
-        // owns llama.cpp global initialization. The worker never drops this token.
-        Err(llama_cpp_2::LlamaCppError::BackendAlreadyInitialized) => {
-            let _ = LLAMA_BACKEND.set(&EXTERNAL_LLAMA_BACKEND);
-            Ok(LLAMA_BACKEND
-                .get()
-                .copied()
-                .expect("external llama backend cached"))
-        }
-        Err(err) => Err(format!("failed to initialize llama backend: {err}")),
-    }
-}
-
-#[allow(dead_code)]
-fn build_rewrite_prompt(
-    model: &LlamaModel,
-    chat_template: &LlamaChatTemplate,
-    transcript: &RewriteTranscript,
-    profile: ResolvedRewriteProfile,
-    custom_instructions: Option<&str>,
-) -> std::result::Result<String, String> {
-    let prompt = build_prompt(transcript, profile, custom_instructions)?;
-    if matches!(profile, ResolvedRewriteProfile::Qwen) {
-        return build_qwen_rewrite_prompt(model, chat_template, &prompt);
-    }
-
-    let messages = vec![
-        LlamaChatMessage::new("system".into(), prompt.system)
-            .map_err(|e| format!("failed to build rewrite system message: {e}"))?,
-        LlamaChatMessage::new("user".into(), prompt.user)
-            .map_err(|e| format!("failed to build rewrite user message: {e}"))?,
-    ];
-
-    model
-        .apply_chat_template(chat_template, &messages, true)
-        .map_err(|e| format!("failed to apply rewrite chat template: {e}"))
-}
-
-fn build_qwen_rewrite_prompt(
-    model: &LlamaModel,
-    chat_template: &LlamaChatTemplate,
+pub(crate) fn build_oaicompat_messages_json(
     prompt: &RewritePrompt,
 ) -> std::result::Result<String, String> {
-    let messages_json = build_oaicompat_messages_json(prompt)?;
-    let result = model
-        .apply_chat_template_oaicompat(
-            chat_template,
-            &OpenAIChatTemplateParams {
-                messages_json: &messages_json,
-                tools_json: None,
-                tool_choice: None,
-                json_schema: None,
-                grammar: None,
-                reasoning_format: None,
-                chat_template_kwargs: None,
-                add_generation_prompt: true,
-                use_jinja: true,
-                parallel_tool_calls: false,
-                enable_thinking: false,
-                add_bos: false,
-                add_eos: false,
-                parse_tool_calls: false,
-            },
-        )
-        .map_err(|e| format!("failed to apply Qwen rewrite chat template: {e}"))?;
-    Ok(result.prompt)
-}
-
-fn build_oaicompat_messages_json(prompt: &RewritePrompt) -> std::result::Result<String, String> {
     serde_json::to_string(&vec![
         json!({
             "role": "system",
@@ -346,7 +93,7 @@ fn correction_policy_contract(
             "Conservative: stay close to explicit rewrite candidates and glossary evidence. If uncertain, prefer candidate-preserving output over freer rewriting."
         }
         crate::rewrite_protocol::RewriteCorrectionPolicy::Balanced => {
-            "Balanced: allow stronger technical correction when the glossary, app context, or utterance semantics support it. Prefer candidate-backed output when it is competitive, but do not keep an obviously wrong technical spelling just because it appears in the candidate list."
+            "Balanced: proactively fix obvious technical or proper-name misrecognitions when glossary terms, app context, nearby category words, or utterance semantics make the intended term clearly more plausible than the literal transcript. Prefer candidate-backed output when it is competitive, but do not keep an obviously wrong technical spelling just because it appears in the candidate list."
         }
         crate::rewrite_protocol::RewriteCorrectionPolicy::Aggressive => {
             "Aggressive: allow freer technical correction and contextual cleanup when the utterance strongly points to a technical term or proper name. Candidates are useful evidence, not hard limits, as long as you still return only final text within the provided bounds."
@@ -362,39 +109,11 @@ fn agentic_latitude_contract(
             "In conservative mode, treat the candidate list and glossary as the main evidence. Only make a freer technical normalization when the utterance itself makes the intended term unusually clear."
         }
         crate::rewrite_protocol::RewriteCorrectionPolicy::Balanced => {
-            "In balanced mode, you may normalize likely technical terms, product names, commands, libraries, languages, editors, or Linux components even when the literal transcript spelling is noisy or the exact canonical form is not already present in the candidate list, as long as the utterance strongly supports that normalization."
+            "In balanced mode, you should normalize likely technical terms, product names, commands, libraries, languages, editors, or Linux components when the literal transcript is an obvious phonetic near-miss and the utterance strongly supports the canonical form, even if that exact spelling is not already present in the candidate list."
         }
         crate::rewrite_protocol::RewriteCorrectionPolicy::Aggressive => {
             "In aggressive mode, you may confidently rewrite phonetically similar words into the most plausible technical term or proper name when the utterance semantics, app context, or nearby category cues make that interpretation clearly better than the literal transcript."
         }
-    }
-}
-
-#[allow(dead_code)]
-struct RewriteBehavior {
-    top_k: i32,
-    top_p: f32,
-    temperature: f32,
-}
-
-#[allow(dead_code)]
-fn rewrite_behavior(profile: ResolvedRewriteProfile) -> RewriteBehavior {
-    match profile {
-        ResolvedRewriteProfile::Qwen => RewriteBehavior {
-            top_k: 24,
-            top_p: 0.9,
-            temperature: 0.1,
-        },
-        ResolvedRewriteProfile::Generic => RewriteBehavior {
-            top_k: 32,
-            top_p: 0.92,
-            temperature: 0.12,
-        },
-        ResolvedRewriteProfile::LlamaCompat => RewriteBehavior {
-            top_k: 40,
-            top_p: 0.95,
-            temperature: 0.15,
-        },
     }
 }
 
@@ -411,7 +130,9 @@ explicit correction says otherwise. Do not normalize names into more common spel
 When the utterance clearly refers to software, tools, APIs, libraries, Linux components, product names, or other \
 technical concepts, prefer the most plausible intended technical term or proper name over a phonetically similar common \
 word. Use nearby category words like window manager, editor, language, library, package manager, shell, or terminal \
-tool to disambiguate technical names. If the utterance remains genuinely ambiguous, stay close to the transcript rather \
+tool to disambiguate technical names. When a dictated word is an obvious phonetic near-miss for a likely technical term \
+and the surrounding context clearly identifies the category, correct it to the canonical technical spelling instead of \
+echoing the miss. If multiple plausible interpretations remain similarly credible, stay close to the transcript rather \
 than inventing a niche term. \
 If an edit intent says to replace or cancel previous wording, preserve that edit and do not keep the spoken correction \
 phrase itself unless the transcript clearly still intends it. Examples:\n\
@@ -423,6 +144,7 @@ phrase itself unless the transcript clearly still intends it. Examples:\n\
 - raw: Let's meet tomorrow, or rather Friday.\n  correction-aware: Let's meet Friday.\n  final: Let's meet Friday.\n\
 - raw: I'm currently using the window manager Hyperland.\n  correction-aware: I'm currently using the window manager Hyperland.\n  final: I'm currently using the window manager Hyprland.\n\
 - raw: I'm switching from Sui to Hyperland.\n  correction-aware: I'm switching from Sui to Hyperland.\n  final: I'm switching from Sway to Hyprland.\n\
+- raw: I moved back to the window manager neary.\n  correction-aware: I moved back to the window manager neary.\n  final: I moved back to the window manager niri.\n\
 - raw: I use type script for backend tooling.\n  correction-aware: I use type script for backend tooling.\n  final: I use TypeScript for backend tooling.\n\
 - raw: I edit the config in neo vim.\n  correction-aware: I edit the config in neo vim.\n  final: I edit the config in Neovim.";
 
@@ -440,7 +162,9 @@ unless a user dictionary or explicit correction says otherwise. Do not normalize
 because they look familiar. When the utterance clearly refers to software, tools, APIs, libraries, Linux components, \
 product names, or other technical concepts, prefer the most plausible intended technical term or proper name over a \
 phonetically similar common word. Use nearby category words like window manager, editor, language, library, package \
-manager, shell, or terminal tool to disambiguate technical names. If the utterance remains genuinely ambiguous, stay \
+manager, shell, or terminal tool to disambiguate technical names. When a dictated word is an obvious phonetic near-miss \
+for a likely technical term and the surrounding context clearly identifies the category, correct it to the canonical \
+technical spelling instead of echoing the miss. If multiple plausible interpretations remain similarly credible, stay \
 close to the transcript rather than inventing a niche term. If an edit intent says to replace or cancel previous wording, preserve that edit and do \
 not keep the spoken correction phrase itself unless the transcript clearly still intends it. Examples:\n\
 - raw: Hello there. Scratch that. Hi.\n  correction-aware: Hi.\n  final: Hi.\n\
@@ -451,6 +175,7 @@ not keep the spoken correction phrase itself unless the transcript clearly still
 - raw: Let's meet tomorrow, or rather Friday.\n  correction-aware: Let's meet Friday.\n  final: Let's meet Friday.\n\
 - raw: I'm currently using the window manager Hyperland.\n  correction-aware: I'm currently using the window manager Hyperland.\n  final: I'm currently using the window manager Hyprland.\n\
 - raw: I'm switching from Sui to Hyperland.\n  correction-aware: I'm switching from Sui to Hyperland.\n  final: I'm switching from Sway to Hyprland.\n\
+- raw: I moved back to the window manager neary.\n  correction-aware: I moved back to the window manager neary.\n  final: I moved back to the window manager niri.\n\
 - raw: I use type script for backend tooling.\n  correction-aware: I use type script for backend tooling.\n  final: I use TypeScript for backend tooling.\n\
 - raw: I edit the config in neo vim.\n  correction-aware: I edit the config in neo vim.\n  final: I edit the config in Neovim."
         }
@@ -460,10 +185,11 @@ not keep the spoken correction phrase itself unless the transcript clearly still
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RewriteRoute {
-    Fast,
-    ResolvedCorrection,
     SessionCandidateAdjudication,
     CandidateAdjudication,
+    AgenticCandidateAdjudication,
+    ResolvedCorrection,
+    Fast,
 }
 
 fn build_user_message(transcript: &RewriteTranscript) -> String {
@@ -564,6 +290,35 @@ Do not keep spoken edit cues in the final text when they act as edits.\n\
 {recommended_candidate}\
 Candidate interpretations:\n\
 {rewrite_candidates}\
+Correction candidate:\n\
+{correction_aware}\n\
+{aggressive_candidate}\
+Raw transcript:\n\
+{raw}\n\
+Recent segments:\n\
+{recent_segments}\n\
+Final text:"
+            )
+        }
+        RewriteRoute::AgenticCandidateAdjudication => {
+            let rewrite_candidates = render_rewrite_candidates(transcript);
+            let recommended_candidate = render_recommended_candidate(transcript);
+            let recent_segments = render_recent_segments(transcript, 4);
+            let glossary_candidates = render_glossary_candidates(transcript);
+            let aggressive_candidate = render_aggressive_candidate(transcript);
+            format!(
+                "Language: {language}\n\
+{agentic_context}\
+This utterance likely refers to a technical term, product name, command, library, or proper name that may need contextual normalization.\n\
+Choose the most plausible final text from the available candidates and the active glossary/app context.\n\
+Prefer the recommended candidate unless another listed candidate is clearly better.\n\
+If a glossary-backed candidate cleanly resolves an obvious phonetic near-miss, it should usually win.\n\
+Preserve uncommon names when the evidence points to them, but do not invent niche terms when the evidence is weak.\n\
+{recommended_candidate}\
+Candidate interpretations:\n\
+{rewrite_candidates}\
+Glossary-backed candidates:\n\
+{glossary_candidates}\
 Correction candidate:\n\
 {correction_aware}\n\
 {aggressive_candidate}\
@@ -685,6 +440,8 @@ fn rewrite_route(transcript: &RewriteTranscript) -> RewriteRoute {
         RewriteRoute::SessionCandidateAdjudication
     } else if requires_candidate_adjudication(transcript) {
         RewriteRoute::CandidateAdjudication
+    } else if requires_agentic_candidate_adjudication(transcript) {
+        RewriteRoute::AgenticCandidateAdjudication
     } else if transcript.correction_aware_text.trim() != transcript.raw_text.trim() {
         RewriteRoute::ResolvedCorrection
     } else {
@@ -692,8 +449,88 @@ fn rewrite_route(transcript: &RewriteTranscript) -> RewriteRoute {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn route_label(transcript: &RewriteTranscript) -> &'static str {
+    match rewrite_route(transcript) {
+        RewriteRoute::SessionCandidateAdjudication => "session_candidate_adjudication",
+        RewriteRoute::CandidateAdjudication => "candidate_adjudication",
+        RewriteRoute::AgenticCandidateAdjudication => "agentic_candidate_adjudication",
+        RewriteRoute::ResolvedCorrection => "resolved_correction",
+        RewriteRoute::Fast => "fast",
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn debug_summary(transcript: &RewriteTranscript) -> String {
+    let recommended_candidate = transcript
+        .recommended_candidate
+        .as_ref()
+        .map(|candidate| candidate.text.as_str())
+        .unwrap_or("(none)");
+    let recommended_session_candidate = transcript
+        .recommended_session_candidate
+        .as_ref()
+        .map(|candidate| candidate.text.as_str())
+        .unwrap_or("(none)");
+    format!(
+        "route: {}\n\
+correction_policy: {}\n\
+raw_text: {}\n\
+correction_aware_text: {}\n\
+recommended_candidate: {}\n\
+recommended_session_candidate: {}\n\
+matched_rules:\n\
+{}\
+effective_rule_instructions:\n\
+{}\
+active_glossary_terms:\n\
+{}\
+rewrite_candidates:\n\
+{}\
+glossary_candidates:\n\
+{}",
+        route_label(transcript),
+        transcript.policy_context.correction_policy.as_str(),
+        transcript.raw_text.trim(),
+        transcript.correction_aware_text.trim(),
+        recommended_candidate,
+        recommended_session_candidate,
+        render_matched_rule_names(transcript),
+        render_effective_rule_instructions(transcript),
+        render_active_glossary_terms(transcript),
+        render_rewrite_candidates(transcript),
+        render_glossary_candidates(transcript),
+    )
+}
+
 fn requires_candidate_adjudication(transcript: &RewriteTranscript) -> bool {
     !transcript.edit_signals.is_empty() || !transcript.edit_hypotheses.is_empty()
+}
+
+fn requires_agentic_candidate_adjudication(transcript: &RewriteTranscript) -> bool {
+    if !has_policy_context(transcript)
+        || matches!(
+            transcript.policy_context.correction_policy,
+            crate::rewrite_protocol::RewriteCorrectionPolicy::Conservative
+        )
+    {
+        return false;
+    }
+
+    transcript
+        .recommended_candidate
+        .as_ref()
+        .map(|candidate| {
+            let text = candidate.text.trim();
+            !text.is_empty() && text != transcript.correction_aware_text.trim()
+        })
+        .unwrap_or_else(|| {
+            transcript
+                .policy_context
+                .glossary_candidates
+                .iter()
+                .any(|candidate| candidate.text.trim() != transcript.correction_aware_text.trim())
+        })
 }
 
 fn has_strong_explicit_edit_cue(transcript: &RewriteTranscript) -> bool {
@@ -1074,7 +911,8 @@ fn has_policy_context(transcript: &RewriteTranscript) -> bool {
 }
 
 #[allow(dead_code)]
-fn effective_max_tokens(max_tokens: usize, transcript: &RewriteTranscript) -> usize {
+pub(crate) fn effective_max_tokens(max_tokens: usize, transcript: &RewriteTranscript) -> usize {
+    let max_tokens = normalized_rewrite_max_tokens(max_tokens);
     let word_count = transcript
         .correction_aware_text
         .split_whitespace()
@@ -1095,6 +933,46 @@ fn effective_max_tokens(max_tokens: usize, transcript: &RewriteTranscript) -> us
         .saturating_add(24)
         .saturating_add(extra_budget);
     derived.clamp(minimum, max_tokens)
+}
+
+#[allow(dead_code)]
+pub(crate) fn effective_max_output_chars(
+    max_output_chars: usize,
+    transcript: &RewriteTranscript,
+) -> usize {
+    let max_output_chars = normalized_rewrite_max_output_chars(max_output_chars);
+    let transcript_chars = transcript
+        .correction_aware_text
+        .chars()
+        .count()
+        .max(transcript.raw_text.chars().count());
+    let minimum = 1200;
+    let extra_margin = if requires_candidate_adjudication(transcript) {
+        768
+    } else {
+        384
+    };
+    let derived = transcript_chars
+        .saturating_mul(2)
+        .saturating_add(extra_margin);
+    derived.clamp(minimum, max_output_chars)
+}
+
+fn normalized_rewrite_max_tokens(max_tokens: usize) -> usize {
+    if max_tokens == LEGACY_REWRITE_MAX_TOKENS {
+        RECOMMENDED_REWRITE_MAX_TOKENS
+    } else {
+        max_tokens.max(64)
+    }
+}
+
+#[allow(dead_code)]
+fn normalized_rewrite_max_output_chars(max_output_chars: usize) -> usize {
+    if max_output_chars == LEGACY_REWRITE_MAX_OUTPUT_CHARS {
+        RECOMMENDED_REWRITE_MAX_OUTPUT_CHARS
+    } else {
+        max_output_chars.max(1200)
+    }
 }
 
 pub(crate) fn sanitize_rewrite_output(raw: &str) -> String {
@@ -1305,6 +1183,31 @@ mod tests {
         }
     }
 
+    fn glossary_agentic_transcript() -> RewriteTranscript {
+        let mut transcript = fast_agentic_transcript();
+        transcript.rewrite_candidates.insert(
+            0,
+            RewriteCandidate {
+                kind: RewriteCandidateKind::GlossaryCorrection,
+                text: "I'm currently using the window manager Hyprland.".into(),
+            },
+        );
+        transcript.recommended_candidate = Some(RewriteCandidate {
+            kind: RewriteCandidateKind::GlossaryCorrection,
+            text: "I'm currently using the window manager Hyprland.".into(),
+        });
+        transcript.policy_context.active_glossary_terms =
+            vec![crate::rewrite_protocol::RewritePolicyGlossaryTerm {
+                term: "Hyprland".into(),
+                aliases: vec!["hyperland".into()],
+            }];
+        transcript.policy_context.glossary_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::GlossaryCorrection,
+            text: "I'm currently using the window manager Hyprland.".into(),
+        }];
+        transcript
+    }
+
     #[test]
     fn instructions_cover_self_correction_examples() {
         let instructions = rewrite_instructions(ResolvedRewriteProfile::LlamaCompat);
@@ -1313,6 +1216,7 @@ mod tests {
         assert!(instructions.contains("scratch that, brownies"));
         assert!(instructions.contains("window manager Hyperland"));
         assert!(instructions.contains("switching from Sui to Hyperland"));
+        assert!(instructions.contains("window manager neary"));
     }
 
     #[test]
@@ -1327,6 +1231,18 @@ mod tests {
         let instructions = rewrite_instructions(ResolvedRewriteProfile::LlamaCompat);
         assert!(instructions.contains("technical concepts"));
         assert!(instructions.contains("phonetically similar common word"));
+        assert!(instructions.contains("obvious phonetic near-miss"));
+    }
+
+    #[test]
+    fn balanced_policy_contract_pushes_obvious_corrections() {
+        let contract = correction_policy_contract(RewriteCorrectionPolicy::Balanced);
+        assert!(
+            contract.contains("proactively fix obvious technical or proper-name misrecognitions")
+        );
+        let latitude = agentic_latitude_contract(RewriteCorrectionPolicy::Balanced);
+        assert!(latitude.contains("should normalize likely technical terms"));
+        assert!(latitude.contains("obvious phonetic near-miss"));
     }
 
     #[test]
@@ -1389,6 +1305,37 @@ mod tests {
                 "Available rewrite candidates (advisory, not exhaustive in agentic mode)"
             )
         );
+    }
+
+    #[test]
+    fn agentic_glossary_prompt_uses_candidate_adjudication_route() {
+        let transcript = glossary_agentic_transcript();
+        assert!(matches!(
+            rewrite_route(&transcript),
+            RewriteRoute::AgenticCandidateAdjudication
+        ));
+        let prompt = build_user_message(&transcript);
+        assert!(prompt.contains(
+            "This utterance likely refers to a technical term, product name, command, library, or proper name"
+        ));
+        assert!(prompt.contains(
+            "Prefer the recommended candidate unless another listed candidate is clearly better."
+        ));
+        assert!(prompt.contains("Glossary-backed candidates:"));
+        assert!(prompt.contains(
+            "Recommended interpretation:\nI'm currently using the window manager Hyprland."
+        ));
+        assert!(
+            prompt.contains("Raw transcript:\nI'm currently using the window manager hyperland.")
+        );
+        assert!(prompt.contains("Candidate interpretations:\n"));
+    }
+
+    #[test]
+    fn conservative_policy_does_not_use_agentic_candidate_adjudication_route() {
+        let mut transcript = glossary_agentic_transcript();
+        transcript.policy_context.correction_policy = RewriteCorrectionPolicy::Conservative;
+        assert!(matches!(rewrite_route(&transcript), RewriteRoute::Fast));
     }
 
     #[test]

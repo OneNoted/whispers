@@ -4,6 +4,7 @@ mod asr;
 mod asr_model;
 mod asr_protocol;
 mod audio;
+mod branding;
 mod cleanup;
 mod cli;
 mod cloud;
@@ -17,6 +18,8 @@ mod file_audio;
 mod inject;
 mod model;
 mod nemo_asr;
+mod osd;
+mod osd_protocol;
 mod personalization;
 mod postprocess;
 mod rewrite;
@@ -26,10 +29,12 @@ mod rewrite_protocol;
 mod rewrite_worker;
 mod session;
 mod setup;
+mod status;
 #[cfg(test)]
 mod test_support;
 mod transcribe;
 mod ui;
+mod voice;
 
 use std::path::{Path, PathBuf};
 
@@ -262,6 +267,20 @@ async fn run_default(cli: &Cli) -> crate::error::Result<()> {
     app::run(config).await
 }
 
+async fn run_voice(cli: &Cli) -> crate::error::Result<()> {
+    let Some(_pid_lock) = acquire_or_signal_lock()? else {
+        return Ok(());
+    };
+
+    tracing::info!("whispers v{} (voice mode)", env!("CARGO_PKG_VERSION"));
+
+    let config = Config::load(cli.config.as_deref())?;
+    asr::validate_transcription_config(&config)?;
+    tracing::debug!("config loaded: {config:?}");
+
+    voice::run(config).await
+}
+
 #[tokio::main]
 async fn main() -> crate::error::Result<()> {
     let cli = Cli::parse();
@@ -270,6 +289,8 @@ async fn main() -> crate::error::Result<()> {
 
     match &cli.command {
         None => run_default(&cli).await,
+        Some(Command::Status) => status::print_status(cli.config.as_deref()),
+        Some(Command::Voice) => run_voice(&cli).await,
         Some(Command::Completions { shell }) => completions::run_completions(*shell),
         Some(Command::Setup) => setup::run_setup(cli.config.as_deref()).await,
         Some(Command::Transcribe { file, output, raw }) => {

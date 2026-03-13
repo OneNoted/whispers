@@ -265,6 +265,19 @@ impl FasterWhisperService {
     }
 
     pub async fn transcribe(&self, audio: &[f32], sample_rate: u32) -> Result<Transcript> {
+        self.transcribe_mode(audio, sample_rate, false).await
+    }
+
+    pub async fn transcribe_live(&self, audio: &[f32], sample_rate: u32) -> Result<Transcript> {
+        self.transcribe_mode(audio, sample_rate, true).await
+    }
+
+    async fn transcribe_mode(
+        &self,
+        audio: &[f32],
+        sample_rate: u32,
+        live: bool,
+    ) -> Result<Transcript> {
         let timeout = Duration::from_millis(60_000);
         self.ensure_running(timeout).await?;
 
@@ -290,6 +303,7 @@ impl FasterWhisperService {
         let mut payload = serde_json::to_vec(&AsrRequest::Transcribe {
             audio_f32_b64: base64::engine::general_purpose::STANDARD.encode(audio_bytes),
             sample_rate,
+            live,
         })
         .map_err(|e| WhsprError::Transcription(format!("failed to encode ASR request: {e}")))?;
         payload.push(b'\n');

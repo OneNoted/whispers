@@ -77,7 +77,7 @@ cargo install --git https://github.com/OneNoted/whispers --no-default-features
 
 ### Setup
 
-Run the interactive setup wizard to download a local ASR model, generate config, and optionally enable local or cloud advanced dictation. Recommended local models are shown first, and experimental backends like Parakeet are called out explicitly before you opt into them:
+Run the interactive setup wizard to download a local ASR model, generate config, optionally enable local or cloud advanced dictation, and offer shell completion install for the supported shells it finds on your `PATH`. Recommended local models are shown first, and experimental backends like Parakeet are called out explicitly before you opt into them:
 
 ```sh
 whispers setup
@@ -129,7 +129,7 @@ That still remains a single install: `whispers` manages local ASR models, the op
 
 ## Shell completions
 
-Print completion scripts to `stdout`:
+`whispers setup` can detect supported shells on your `PATH` and install completions for one shell or all detected shells. You can also print completion scripts to `stdout` manually:
 
 ```sh
 # auto-detect from $SHELL (falls back to parent process name)

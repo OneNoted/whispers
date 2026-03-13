@@ -8,6 +8,8 @@ pub enum AsrRequest {
     Transcribe {
         audio_f32_b64: String,
         sample_rate: u32,
+        #[serde(default)]
+        live: bool,
     },
 }
 

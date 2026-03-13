@@ -171,15 +171,27 @@ async fn rewrite_transcript_or_fallback(
     rewrite_transcript.recommended_session_candidate = session_plan.recommended.clone();
     tracing::debug!(
         mode = config.postprocess.mode.as_str(),
+        rewrite_route = crate::rewrite::route_label(&rewrite_transcript),
+        correction_policy = rewrite_transcript.policy_context.correction_policy.as_str(),
         edit_hypotheses = rewrite_transcript.edit_hypotheses.len(),
         rewrite_candidates = rewrite_transcript.rewrite_candidates.len(),
+        glossary_candidates = rewrite_transcript.policy_context.glossary_candidates.len(),
         session_backtrack_candidates = rewrite_transcript.session_backtrack_candidates.len(),
         recommended_candidate = rewrite_transcript
             .recommended_candidate
             .as_ref()
             .map(|candidate| candidate.text.as_str())
             .unwrap_or(""),
+        recommended_session_candidate = rewrite_transcript
+            .recommended_session_candidate
+            .as_ref()
+            .map(|candidate| candidate.text.as_str())
+            .unwrap_or(""),
         "prepared rewrite request"
+    );
+    tracing::trace!(
+        "rewrite diagnostics:\n{}",
+        crate::rewrite::debug_summary(&rewrite_transcript)
     );
     let custom_instructions = personalization::custom_instructions(rules);
     let deterministic_session_replacement = session_plan.deterministic_replacement_text.clone();
@@ -282,18 +294,18 @@ async fn rewrite_transcript_or_fallback(
                 .map(|candidate| candidate.text.clone())
         });
 
-    let (base, rewrite_used) = match rewrite_result {
+    let (base, rewrite_used, decision_source) = match rewrite_result {
         Ok(text) if rewrite_output_accepted(config, &rewrite_transcript, &text) => {
             tracing::debug!(
                 output_len = text.len(),
                 mode = config.postprocess.mode.as_str(),
                 "rewrite applied successfully"
             );
-            (text, true)
+            (text, true, "rewrite_accepted")
         }
         Ok(text) if text.trim().is_empty() => {
             tracing::warn!("rewrite model returned empty text; using fallback");
-            (fallback, false)
+            (fallback, false, "empty_rewrite_output")
         }
         Ok(text) => {
             tracing::warn!(
@@ -301,13 +313,33 @@ async fn rewrite_transcript_or_fallback(
                 output_len = text.len(),
                 "rewrite output failed acceptance guard; using fallback"
             );
-            (fallback, false)
+            (fallback, false, "acceptance_guard_rejected")
         }
         Err(err) => {
             tracing::warn!("rewrite failed: {err}; using fallback");
-            (fallback, false)
+            (fallback, false, "rewrite_error")
         }
     };
+    let matched_recommended_candidate = recommended_candidate
+        .as_deref()
+        .map(|candidate| candidate.trim() == base.trim())
+        .unwrap_or(false);
+    let matched_glossary_candidate = rewrite_transcript
+        .policy_context
+        .glossary_candidates
+        .iter()
+        .any(|candidate| candidate.text.trim() == base.trim());
+    tracing::debug!(
+        mode = config.postprocess.mode.as_str(),
+        rewrite_route = crate::rewrite::route_label(&rewrite_transcript),
+        rewrite_used,
+        decision_source,
+        matched_recommended_candidate,
+        matched_glossary_candidate,
+        final_chars = base.len(),
+        "rewrite decision finalized"
+    );
+    tracing::trace!("rewrite final text: {}", base);
     let operation = rewrite_transcript
         .recommended_session_candidate
         .as_ref()

@@ -9,9 +9,17 @@ use crate::transcribe::{
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub enum PreparedTranscriber {
     Whisper(tokio::task::JoinHandle<Result<WhisperLocal>>),
+    Faster(FasterWhisperService),
+    Nemo(NemoAsrService),
+    Cloud(CloudService),
+}
+
+pub enum LiveTranscriber {
+    Whisper(Arc<Mutex<WhisperLocal>>),
     Faster(FasterWhisperService),
     Nemo(NemoAsrService),
     Cloud(CloudService),
@@ -46,6 +54,41 @@ pub fn prepare_transcriber(config: &Config) -> Result<PreparedTranscriber> {
                 )
             }),
         TranscriptionBackend::Cloud => Ok(PreparedTranscriber::Cloud(CloudService::new(config)?)),
+    }
+}
+
+pub async fn prepare_live_transcriber(config: &Config) -> Result<LiveTranscriber> {
+    cleanup_stale_transcribers(config)?;
+
+    match config.transcription.backend {
+        TranscriptionBackend::WhisperCpp => {
+            let whisper_config = config.transcription.clone();
+            let model_path = config.resolved_model_path();
+            let backend = tokio::task::spawn_blocking(move || {
+                WhisperLocal::new(&whisper_config, &model_path)
+            })
+            .await
+            .map_err(|e| WhsprError::Transcription(format!("model loading task failed: {e}")))??;
+            Ok(LiveTranscriber::Whisper(Arc::new(Mutex::new(backend))))
+        }
+        TranscriptionBackend::FasterWhisper => {
+            faster_whisper::prepare_service(&config.transcription)
+                .map(LiveTranscriber::Faster)
+                .ok_or_else(|| {
+                    WhsprError::Transcription(
+                        "faster-whisper backend selected but no model path could be resolved"
+                            .into(),
+                    )
+                })
+        }
+        TranscriptionBackend::Nemo => nemo_asr::prepare_service(&config.transcription)
+            .map(LiveTranscriber::Nemo)
+            .ok_or_else(|| {
+                WhsprError::Transcription(
+                    "nemo backend selected but no model reference could be resolved".into(),
+                )
+            }),
+        TranscriptionBackend::Cloud => Ok(LiveTranscriber::Cloud(CloudService::new(config)?)),
     }
 }
 
@@ -89,6 +132,20 @@ pub fn prewarm_transcriber(prepared: &PreparedTranscriber, phase: &str) {
     }
 }
 
+pub fn prewarm_live_transcriber(prepared: &LiveTranscriber, phase: &str) {
+    match prepared {
+        LiveTranscriber::Faster(service) => match service.prewarm() {
+            Ok(()) => tracing::info!("prewarming faster-whisper worker via {}", phase),
+            Err(err) => tracing::warn!("failed to prewarm faster-whisper worker: {err}"),
+        },
+        LiveTranscriber::Nemo(service) => match service.prewarm() {
+            Ok(()) => tracing::info!("prewarming NeMo ASR worker via {}", phase),
+            Err(err) => tracing::warn!("failed to prewarm NeMo ASR worker: {err}"),
+        },
+        LiveTranscriber::Whisper(_) | LiveTranscriber::Cloud(_) => {}
+    }
+}
+
 pub async fn transcribe_audio(
     config: &Config,
     prepared: PreparedTranscriber,
@@ -120,6 +177,52 @@ pub async fn transcribe_audio(
             }
         },
         PreparedTranscriber::Cloud(service) => {
+            match service.transcribe_audio(config, &audio, sample_rate).await {
+                Ok(transcript) => Ok(transcript),
+                Err(err) => {
+                    tracing::warn!("cloud transcription failed: {err}");
+                    fallback_local_transcribe(config, audio, sample_rate).await
+                }
+            }
+        }
+    }
+}
+
+pub async fn transcribe_live_audio(
+    config: &Config,
+    prepared: &LiveTranscriber,
+    audio: Vec<f32>,
+    sample_rate: u32,
+) -> Result<Transcript> {
+    match prepared {
+        LiveTranscriber::Whisper(backend) => {
+            let backend = Arc::clone(backend);
+            tokio::task::spawn_blocking(move || {
+                let backend = backend.lock().map_err(|_| {
+                    WhsprError::Transcription("live whisper backend lock poisoned".into())
+                })?;
+                backend.transcribe(&audio, sample_rate)
+            })
+            .await
+            .map_err(|e| WhsprError::Transcription(format!("transcription task failed: {e}")))?
+        }
+        LiveTranscriber::Faster(service) => {
+            match service.transcribe_live(&audio, sample_rate).await {
+                Ok(transcript) => Ok(transcript),
+                Err(err) => {
+                    tracing::warn!("faster-whisper transcription failed: {err}");
+                    fallback_whisper_cpp_transcribe(config, audio, sample_rate).await
+                }
+            }
+        }
+        LiveTranscriber::Nemo(service) => match service.transcribe(&audio, sample_rate).await {
+            Ok(transcript) => Ok(transcript),
+            Err(err) => {
+                tracing::warn!("NeMo ASR transcription failed: {err}");
+                fallback_whisper_cpp_transcribe(config, audio, sample_rate).await
+            }
+        },
+        LiveTranscriber::Cloud(service) => {
             match service.transcribe_audio(config, &audio, sample_rate).await {
                 Ok(transcript) => Ok(transcript),
                 Err(err) => {

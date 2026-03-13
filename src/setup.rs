@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use crate::asr_model::{self, ASR_MODELS, AsrModelInfo};
+use crate::cli::CompletionShell;
 use crate::config::{
     self, CloudLanguageMode, CloudProvider, CloudSettingsUpdate, PostprocessMode, RewriteBackend,
-    RewriteFallback, TranscriptionBackend, TranscriptionFallback, resolve_config_path,
+    RewriteFallback, TranscriptionBackend, TranscriptionFallback, VoiceConfig, resolve_config_path,
 };
 use crate::error::Result;
 use crate::rewrite_model::{self, REWRITE_MODELS};
@@ -14,6 +15,7 @@ struct SetupSelections {
     rewrite_model: Option<&'static str>,
     postprocess_mode: PostprocessMode,
     cloud: CloudSetup,
+    voice: VoiceSetup,
 }
 
 struct CloudSetup {
@@ -25,6 +27,13 @@ struct CloudSetup {
     asr_fallback: TranscriptionFallback,
     rewrite_enabled: bool,
     rewrite_fallback: RewriteFallback,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct VoiceSetup {
+    enabled: bool,
+    live_inject: bool,
+    live_rewrite: bool,
 }
 
 impl Default for CloudSetup {
@@ -80,12 +89,15 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
     if cloud.rewrite_enabled && postprocess_mode == PostprocessMode::Raw {
         postprocess_mode = choose_rewrite_mode(&ui)?;
     }
+    let voice = configure_voice(&ui, postprocess_mode)?;
+    let completion_shells = choose_completion_shells(&ui)?;
 
     let selections = SetupSelections {
         asr_model,
         rewrite_model,
         postprocess_mode,
         cloud,
+        voice,
     };
 
     let config_path = resolve_config_path(config_path_override);
@@ -103,8 +115,10 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
         &selections.cloud,
     )?;
     apply_cloud_settings(&ui, &config_path, &selections.cloud)?;
+    apply_voice_selection(&ui, &config_path, &selections.voice)?;
     maybe_create_agentic_starter_files(&ui, &config_path, &selections)?;
     cleanup_stale_asr_workers(&ui, &config_path)?;
+    maybe_install_shell_completions(&ui, &completion_shells)?;
 
     if let Some(rewrite_model) = selections.rewrite_model {
         ui.print_ok(format!(
@@ -119,7 +133,7 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
     ui.blank();
     print_setup_summary(&ui, &selections);
     ui.blank();
-    print_setup_complete(&ui);
+    print_setup_complete(&ui, &selections);
 
     Ok(())
 }
@@ -199,6 +213,19 @@ fn apply_cloud_settings(ui: &SetupUi, config_path: &Path, cloud: &CloudSetup) ->
             "{} is not set in the current environment yet.",
             crate::ui::value(&cloud.api_key_env)
         ));
+    }
+
+    Ok(())
+}
+
+fn apply_voice_selection(ui: &SetupUi, config_path: &Path, voice: &VoiceSetup) -> Result<()> {
+    let mut voice_config = VoiceConfig::default();
+    voice_config.live_inject = voice.enabled && voice.live_inject;
+    voice_config.live_rewrite = voice.enabled && voice.live_rewrite;
+    config::update_config_voice_settings(config_path, &voice_config)?;
+
+    if !voice.enabled {
+        ui.print_info("Live voice mode: disabled.");
     }
 
     Ok(())
@@ -313,6 +340,137 @@ fn choose_rewrite_mode(ui: &SetupUi) -> Result<PostprocessMode> {
     } else {
         PostprocessMode::AgenticRewrite
     })
+}
+
+fn configure_voice(ui: &SetupUi, postprocess_mode: PostprocessMode) -> Result<VoiceSetup> {
+    if !ui.confirm("Enable experimental live voice mode?", false)? {
+        return Ok(VoiceSetup::default());
+    }
+
+    let items = [
+        "Preview-only: live transcript OSD while recording, final insert on stop",
+        "Live inject: update the target app while recording (freezes on focus change)",
+    ];
+    let selection = ui.select("Choose the live voice behavior", &items, 0)?;
+    let live_inject = selection == 1;
+    let live_rewrite = if postprocess_mode.uses_rewrite() {
+        ui.confirm(
+            "Show live rewrite preview in the OSD while recording?",
+            false,
+        )?
+    } else {
+        ui.print_info("Live rewrite preview needs a rewrite-enabled postprocess mode.");
+        false
+    };
+
+    Ok(VoiceSetup {
+        enabled: true,
+        live_inject,
+        live_rewrite,
+    })
+}
+
+fn choose_completion_shells(ui: &SetupUi) -> Result<Vec<CompletionShell>> {
+    let detected_shells = crate::completions::detect_installed_shells();
+    let current_shell = crate::completions::detect_shell();
+
+    if detected_shells.is_empty() {
+        ui.print_info("Could not find any supported shells on PATH automatically.");
+        if !ui.confirm("Install shell completions anyway?", false)? {
+            return Ok(Vec::new());
+        }
+        return Ok(vec![choose_shell_manually(ui)?]);
+    }
+
+    let mut detected_names = detected_shells
+        .iter()
+        .map(|shell| shell.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if let Some(shell) = current_shell {
+        detected_names.push_str(&format!(" (current shell hint: {})", shell.as_str()));
+    }
+    ui.print_info(format!("Detected supported shells: {detected_names}."));
+
+    if !ui.confirm("Install shell completions?", true)? {
+        return Ok(Vec::new());
+    }
+
+    if detected_shells.len() == 1 {
+        return Ok(detected_shells);
+    }
+
+    let mut items = vec!["all detected shells".to_string()];
+    items.extend(
+        detected_shells
+            .iter()
+            .map(|shell| shell_choice_label(*shell, current_shell)),
+    );
+    let default = current_shell
+        .and_then(|shell| {
+            detected_shells
+                .iter()
+                .position(|candidate| *candidate == shell)
+        })
+        .map_or(0, |index| index + 1);
+    let selection = ui.select("Choose shells for completion install", &items, default)?;
+    if selection == 0 {
+        return Ok(detected_shells);
+    }
+
+    Ok(vec![detected_shells[selection - 1]])
+}
+
+fn choose_shell_manually(ui: &SetupUi) -> Result<CompletionShell> {
+    let items = ["bash", "zsh", "fish", "nushell"];
+    let selection = ui.select("Choose a shell for completions", &items, 0)?;
+    Ok(match selection {
+        0 => CompletionShell::Bash,
+        1 => CompletionShell::Zsh,
+        2 => CompletionShell::Fish,
+        _ => CompletionShell::Nushell,
+    })
+}
+
+fn shell_choice_label(shell: CompletionShell, current_shell: Option<CompletionShell>) -> String {
+    if current_shell == Some(shell) {
+        format!("{} (current shell)", shell.as_str())
+    } else {
+        shell.as_str().to_string()
+    }
+}
+
+fn maybe_install_shell_completions(ui: &SetupUi, shells: &[CompletionShell]) -> Result<()> {
+    if shells.is_empty() {
+        return Ok(());
+    }
+
+    for shell in shells {
+        match crate::completions::install_completions(*shell) {
+            Ok(path) => {
+                ui.print_ok(format!(
+                    "Installed {} completions at {}.",
+                    crate::ui::value(shell.as_str()),
+                    crate::ui::value(path.display().to_string())
+                ));
+                if let Some(note) = crate::completions::install_note(*shell, &path) {
+                    ui.print_info(note);
+                }
+            }
+            Err(err) => {
+                ui.print_warn(format!(
+                    "Failed to install {} completions automatically: {err}",
+                    shell.as_str()
+                ));
+                ui.print_info(format!(
+                    "You can still run {} later.",
+                    crate::ui::value(format!("whispers completions {}", shell.as_str()))
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn configure_cloud(
@@ -458,14 +616,46 @@ fn print_setup_summary(ui: &SetupUi, selections: &SetupSelections) {
             crate::ui::summary_key("NeMo note")
         );
     }
+
+    match (
+        selections.voice.enabled,
+        selections.voice.live_inject,
+        selections.voice.live_rewrite,
+    ) {
+        (false, _, _) => println!("  {}: disabled", crate::ui::summary_key("Voice")),
+        (true, false, false) => println!(
+            "  {}: preview-only via {}",
+            crate::ui::summary_key("Voice"),
+            crate::ui::value("whispers voice")
+        ),
+        (true, true, false) => println!(
+            "  {}: live inject via {}",
+            crate::ui::summary_key("Voice"),
+            crate::ui::value("whispers voice")
+        ),
+        (true, false, true) => println!(
+            "  {}: preview-only via {} with live rewrite preview",
+            crate::ui::summary_key("Voice"),
+            crate::ui::value("whispers voice")
+        ),
+        (true, true, true) => println!(
+            "  {}: live inject via {} with live rewrite preview",
+            crate::ui::summary_key("Voice"),
+            crate::ui::value("whispers voice")
+        ),
+    }
 }
 
-fn print_setup_complete(ui: &SetupUi) {
+fn print_setup_complete(ui: &SetupUi, selections: &SetupSelections) {
     ui.print_header("Setup complete");
     println!("You can now use whispers.");
     ui.print_section("Example keybind");
     ui.print_subtle("Bind it to a key in your compositor, e.g. for Hyprland:");
     println!("  bind = SUPER ALT, D, exec, whispers");
+    if selections.voice.enabled {
+        println!("  bind = SUPER ALT, V, exec, whispers voice");
+        ui.print_subtle("Voice mode is separate so you can keep the existing dictation flow.");
+    }
 }
 
 fn apply_runtime_backend_selection(
@@ -548,6 +738,66 @@ mod tests {
         assert_eq!(
             config.transcription.fallback,
             TranscriptionFallback::ConfiguredLocal
+        );
+    }
+
+    #[test]
+    fn apply_voice_selection_persists_voice_defaults_and_toggles() {
+        let config_path = crate::test_support::unique_temp_path("setup-voice-selection", "toml");
+        config::write_default_config(&config_path, "~/model.bin").expect("write config");
+
+        let ui = SetupUi::new();
+        let voice = VoiceSetup {
+            enabled: true,
+            live_inject: true,
+            live_rewrite: true,
+        };
+        apply_voice_selection(&ui, &config_path, &voice).expect("apply voice selection");
+
+        let config = Config::load(Some(&config_path)).expect("load config");
+        assert!(config.voice.live_inject);
+        assert!(config.voice.live_rewrite);
+        assert_eq!(
+            config.voice.partial_interval_ms,
+            VoiceConfig::default().partial_interval_ms
+        );
+        assert_eq!(
+            config.voice.freeze_on_focus_change,
+            VoiceConfig::default().freeze_on_focus_change
+        );
+    }
+
+    #[test]
+    fn maybe_install_shell_completions_writes_fish_script() {
+        let _env_lock = crate::test_support::env_lock();
+        let _guard = crate::test_support::EnvVarGuard::capture(&[
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+        ]);
+        let root = crate::test_support::unique_temp_dir("setup-shell-completions");
+        crate::test_support::set_env("HOME", &root.to_string_lossy());
+        crate::test_support::remove_env("XDG_CONFIG_HOME");
+        crate::test_support::remove_env("XDG_DATA_HOME");
+
+        let ui = SetupUi::new();
+        maybe_install_shell_completions(&ui, &[CompletionShell::Fish])
+            .expect("install fish completions");
+
+        let path = root.join(".config/fish/completions/whispers.fish");
+        let contents = std::fs::read_to_string(path).expect("read fish completions");
+        assert!(contents.contains("complete -c whispers"));
+    }
+
+    #[test]
+    fn shell_choice_label_marks_current_shell() {
+        assert_eq!(
+            shell_choice_label(CompletionShell::Fish, Some(CompletionShell::Fish)),
+            "fish (current shell)"
+        );
+        assert_eq!(
+            shell_choice_label(CompletionShell::Bash, Some(CompletionShell::Fish)),
+            "bash"
         );
     }
 }

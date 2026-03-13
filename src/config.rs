@@ -21,6 +21,7 @@ pub struct Config {
     pub cleanup: CleanupConfig,
     pub inject: InjectConfig,
     pub feedback: FeedbackConfig,
+    pub voice: VoiceConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -236,6 +237,18 @@ pub struct FeedbackConfig {
     pub stop_sound: String,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct VoiceConfig {
+    pub live_inject: bool,
+    pub live_rewrite: bool,
+    pub partial_interval_ms: u64,
+    pub rewrite_interval_ms: u64,
+    pub context_window_ms: u64,
+    pub min_chunk_ms: u64,
+    pub freeze_on_focus_change: bool,
+}
+
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
@@ -363,8 +376,8 @@ impl Default for RewriteConfig {
             profile: RewriteProfile::Auto,
             timeout_ms: 30000,
             idle_timeout_ms: 120000,
-            max_output_chars: 1200,
-            max_tokens: 256,
+            max_output_chars: 8192,
+            max_tokens: 768,
         }
     }
 }
@@ -453,6 +466,20 @@ impl Default for FeedbackConfig {
             enabled: true,
             start_sound: String::new(),
             stop_sound: String::new(),
+        }
+    }
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            live_inject: false,
+            live_rewrite: false,
+            partial_interval_ms: 400,
+            rewrite_interval_ms: 1400,
+            context_window_ms: 8000,
+            min_chunk_ms: 650,
+            freeze_on_focus_change: true,
         }
     }
 }
@@ -729,9 +756,9 @@ timeout_ms = 30000
 # How long the hidden rewrite worker stays warm without requests
 idle_timeout_ms = 120000
 # Maximum characters accepted from the rewrite model
-max_output_chars = 1200
+max_output_chars = 8192
 # Maximum tokens to generate for rewritten output
-max_tokens = 256
+max_tokens = 768
 
 [agentic_rewrite]
 # App-aware rewrite policy rules used by postprocess.mode = "agentic_rewrite"
@@ -777,6 +804,22 @@ enabled = true
 # Custom sound file paths (empty = use bundled sounds)
 start_sound = ""
 stop_sound = ""
+
+[voice]
+# Experimental live voice mode: mutate the target app while recording
+live_inject = false
+# Experimental live preview rewrite line in the OSD
+live_rewrite = false
+# How often to refresh the live ASR preview while recording
+partial_interval_ms = 400
+# Minimum time between live rewrite preview updates
+rewrite_interval_ms = 1400
+# Audio tail window retranscribed for each live ASR refresh
+context_window_ms = 8000
+# Minimum recorded audio before live ASR starts updating
+min_chunk_ms = 650
+# Freeze live injection if focus changes during the session
+freeze_on_focus_change = true
 "#
     );
 
@@ -874,8 +917,8 @@ pub fn update_config_rewrite_selection(config_path: &Path, selected_model: &str)
     doc["rewrite"]["profile"] = toml_edit::value(RewriteProfile::Auto.as_str());
     doc["rewrite"]["timeout_ms"] = toml_edit::value(30000);
     doc["rewrite"]["idle_timeout_ms"] = toml_edit::value(120000);
-    doc["rewrite"]["max_output_chars"] = toml_edit::value(1200);
-    doc["rewrite"]["max_tokens"] = toml_edit::value(256);
+    doc["rewrite"]["max_output_chars"] = toml_edit::value(8192);
+    doc["rewrite"]["max_tokens"] = toml_edit::value(768);
     doc["agentic_rewrite"]["policy_path"] =
         toml_edit::value(crate::agentic_rewrite::default_policy_path());
     doc["agentic_rewrite"]["glossary_path"] =
@@ -964,6 +1007,27 @@ pub fn update_config_cloud_settings(
     Ok(())
 }
 
+pub fn update_config_voice_settings(config_path: &Path, voice: &VoiceConfig) -> Result<()> {
+    let contents = std::fs::read_to_string(config_path)
+        .map_err(|e| WhsprError::Config(format!("failed to read config: {e}")))?;
+    let mut doc = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| WhsprError::Config(format!("failed to parse config: {e}")))?;
+
+    ensure_standard_postprocess_tables(&mut doc);
+    doc["voice"]["live_inject"] = toml_edit::value(voice.live_inject);
+    doc["voice"]["live_rewrite"] = toml_edit::value(voice.live_rewrite);
+    doc["voice"]["partial_interval_ms"] = toml_edit::value(voice.partial_interval_ms as i64);
+    doc["voice"]["rewrite_interval_ms"] = toml_edit::value(voice.rewrite_interval_ms as i64);
+    doc["voice"]["context_window_ms"] = toml_edit::value(voice.context_window_ms as i64);
+    doc["voice"]["min_chunk_ms"] = toml_edit::value(voice.min_chunk_ms as i64);
+    doc["voice"]["freeze_on_focus_change"] = toml_edit::value(voice.freeze_on_focus_change);
+
+    std::fs::write(config_path, doc.to_string())
+        .map_err(|e| WhsprError::Config(format!("failed to write config: {e}")))?;
+    Ok(())
+}
+
 fn ensure_standard_postprocess_tables(doc: &mut toml_edit::DocumentMut) {
     ensure_root_table(doc, "transcription");
     ensure_root_table(doc, "postprocess");
@@ -974,6 +1038,7 @@ fn ensure_standard_postprocess_tables(doc: &mut toml_edit::DocumentMut) {
     ensure_nested_table(doc, "cloud", "transcription");
     ensure_nested_table(doc, "cloud", "rewrite");
     ensure_root_table(doc, "personalization");
+    ensure_root_table(doc, "voice");
 }
 
 fn normalize_postprocess_mode(doc: &mut toml_edit::DocumentMut) {
@@ -1047,6 +1112,7 @@ mod tests {
         assert_eq!(config.postprocess.mode, PostprocessMode::Raw);
         assert_eq!(config.personalization.snippet_trigger, "insert");
         assert_eq!(config.rewrite.selected_model, "qwen-3.5-4b-q4_k_m");
+        assert_eq!(config.voice, VoiceConfig::default());
     }
 
     #[test]
@@ -1122,6 +1188,7 @@ mod tests {
         assert!(raw.contains("[postprocess]"));
         assert!(raw.contains("[session]"));
         assert!(raw.contains("[rewrite]"));
+        assert!(raw.contains("[voice]"));
         assert!(!raw.contains("[whisper]"));
     }
 
@@ -1249,6 +1316,27 @@ language = "auto"
 
         let raw = std::fs::read_to_string(&config_path).expect("read upgraded config");
         assert!(!raw.contains("[whisper]"));
+    }
+
+    #[test]
+    fn update_voice_settings_roundtrip() {
+        let config_path = crate::test_support::unique_temp_path("config-voice-settings", "toml");
+        write_default_config(&config_path, "~/model.bin").expect("write config");
+
+        let voice = VoiceConfig {
+            live_inject: true,
+            live_rewrite: true,
+            partial_interval_ms: 900,
+            rewrite_interval_ms: 2500,
+            context_window_ms: 15000,
+            min_chunk_ms: 1800,
+            freeze_on_focus_change: false,
+        };
+
+        update_config_voice_settings(&config_path, &voice).expect("update voice settings");
+
+        let loaded = Config::load(Some(&config_path)).expect("load config");
+        assert_eq!(loaded.voice, voice);
     }
 
     #[test]

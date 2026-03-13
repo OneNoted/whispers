@@ -259,6 +259,50 @@ pub fn apply_runtime_policy(config: &Config, transcript: &mut RewriteTranscript)
     }
 
     transcript.policy_context = policy_context;
+    promote_policy_preferred_candidate(transcript);
+}
+
+fn promote_policy_preferred_candidate(transcript: &mut RewriteTranscript) {
+    if matches!(
+        transcript.policy_context.correction_policy,
+        RewriteCorrectionPolicy::Conservative
+    ) {
+        return;
+    }
+
+    let preferred = transcript
+        .policy_context
+        .glossary_candidates
+        .iter()
+        .find(|candidate| {
+            let text = candidate.text.trim();
+            !text.is_empty() && text != transcript.correction_aware_text.trim()
+        })
+        .cloned();
+
+    let Some(preferred) = preferred else {
+        return;
+    };
+
+    if transcript.recommended_candidate.is_some() {
+        return;
+    }
+
+    transcript.recommended_candidate = Some(preferred.clone());
+    tracing::debug!(
+        preferred_candidate = preferred.text,
+        "promoted glossary-backed rewrite candidate to recommended candidate"
+    );
+
+    if let Some(index) = transcript
+        .rewrite_candidates
+        .iter()
+        .position(|candidate| candidate.text == preferred.text)
+        && index > 0
+    {
+        let candidate = transcript.rewrite_candidates.remove(index);
+        transcript.rewrite_candidates.insert(0, candidate);
+    }
 }
 
 pub fn conservative_output_allowed(transcript: &RewriteTranscript, text: &str) -> bool {
@@ -534,12 +578,11 @@ fn resolve_policy_context(
         }
     }
 
-    let mut active_glossary_entries = glossary_entries
-        .iter()
+    let mut active_glossary_entries = built_in_glossary_entries()
+        .into_iter()
+        .chain(glossary_entries.iter().cloned())
         .enumerate()
-        .filter_map(|(index, entry)| {
-            PreparedGlossaryEntry::new(entry.clone()).map(|entry| (index, entry))
-        })
+        .filter_map(|(index, entry)| PreparedGlossaryEntry::new(entry).map(|entry| (index, entry)))
         .filter(|(_, entry)| entry.matcher.matches(context))
         .collect::<Vec<_>>();
     active_glossary_entries
@@ -566,7 +609,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
         AppRule::built_in(
             "baseline/global-default",
             ContextMatcher::default(),
-            "Use the active typing context, recent dictation context, glossary terms, and bounded candidates to resolve technical dictation cleanly while keeping the final-text-only contract. When the utterance clearly points to software, tools, APIs, Linux components, product names, or other technical concepts, prefer the most plausible intended technical term over a phonetically similar common word. Use category cues like window manager, editor, language, library, shell, or package manager to disambiguate nearby technical names. If it remains genuinely ambiguous, stay close to the transcript.",
+            "Use the active typing context, recent dictation context, glossary terms, and bounded candidates to resolve technical dictation cleanly while keeping the final-text-only contract. When the utterance clearly points to software, tools, APIs, Linux components, product names, or other technical concepts, prefer the most plausible intended technical term over a phonetically similar common word. If a token is an obvious phonetic near-miss for a technical term and nearby category words make the intended term clear, proactively normalize it to the canonical spelling. Use category cues like window manager, editor, language, library, shell, or package manager to disambiguate nearby technical names. If multiple plausible technical interpretations remain similarly credible, stay close to the transcript.",
             Some(default_policy),
         ),
         AppRule::built_in(
@@ -575,7 +618,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::Browser),
                 ..ContextMatcher::default()
             },
-            "Favor clean prose and natural punctuation for browser text fields, but stay grounded in the listed candidates, glossary evidence, and the utterance's technical topic when it clearly refers to software or documentation.",
+            "Favor clean prose and natural punctuation for browser text fields, but stay grounded in the listed candidates, glossary evidence, and the utterance's technical topic when it clearly refers to software or documentation. Correct obvious phonetic misses of technical terms or product names when the surrounding sentence makes the intended term clear.",
             Some(RewriteCorrectionPolicy::Balanced),
         ),
         AppRule::built_in(
@@ -584,7 +627,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::GenericText),
                 ..ContextMatcher::default()
             },
-            "Favor clean prose and natural punctuation for general text entry while staying grounded in the listed candidates and glossary evidence. If the utterance clearly discusses technical tools or software, prefer the most plausible technical term over a phonetically similar common word.",
+            "Favor clean prose and natural punctuation for general text entry while staying grounded in the listed candidates and glossary evidence. If the utterance clearly discusses technical tools or software, prefer the most plausible technical term over a phonetically similar common word and proactively fix obvious phonetic near-misses to the canonical spelling.",
             Some(RewriteCorrectionPolicy::Balanced),
         ),
         AppRule::built_in(
@@ -593,7 +636,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::Editor),
                 ..ContextMatcher::default()
             },
-            "Preserve identifiers, filenames, API names, symbols, and technical casing. Avoid rewriting technical wording into generic prose. Infer likely technical terms and proper names from the utterance when the topic is clearly code, tooling, or software.",
+            "Preserve identifiers, filenames, API names, symbols, and technical casing. Avoid rewriting technical wording into generic prose. Infer likely technical terms and proper names from the utterance when the topic is clearly code, tooling, or software, and proactively normalize obvious phonetic misses to the canonical technical spelling.",
             Some(RewriteCorrectionPolicy::Balanced),
         ),
         AppRule::built_in(
@@ -605,6 +648,39 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
             "Preserve commands, flags, paths, package names, environment variables, and punctuation that changes command meaning. Infer technical commands or package names only when the utterance strongly supports them. If uncertain, prefer the closest listed candidate.",
             Some(RewriteCorrectionPolicy::Conservative),
         ),
+    ]
+}
+
+fn built_in_glossary_entries() -> Vec<GlossaryEntry> {
+    vec![
+        GlossaryEntry {
+            term: "TypeScript".into(),
+            aliases: vec!["type script".into(), "types script".into()],
+            matcher: ContextMatcher {
+                surface_kind: Some(RewriteSurfaceKind::Editor),
+                ..ContextMatcher::default()
+            },
+        },
+        GlossaryEntry {
+            term: "Neovim".into(),
+            aliases: vec!["neo vim".into(), "neo-vim".into()],
+            matcher: ContextMatcher::default(),
+        },
+        GlossaryEntry {
+            term: "Hyprland".into(),
+            aliases: vec!["hyperland".into(), "hyper land".into(), "highprland".into()],
+            matcher: ContextMatcher::default(),
+        },
+        GlossaryEntry {
+            term: "niri".into(),
+            aliases: vec!["neary".into(), "niry".into(), "nearie".into()],
+            matcher: ContextMatcher::default(),
+        },
+        GlossaryEntry {
+            term: "Sway".into(),
+            aliases: vec!["sui".into(), "swayy".into()],
+            matcher: ContextMatcher::default(),
+        },
     ]
 }
 
@@ -1033,7 +1109,14 @@ mod tests {
             policy
                 .effective_rule_instructions
                 .iter()
-                .any(|instruction| instruction.contains("phonetically similar common word"))
+                .any(|instruction| instruction
+                    .contains("proactively fix obvious phonetic near-misses"))
+        );
+        assert!(
+            policy
+                .effective_rule_instructions
+                .iter()
+                .any(|instruction| instruction.contains("obvious phonetic near-miss"))
         );
     }
 
@@ -1260,6 +1343,42 @@ mod tests {
                 .rewrite_candidates
                 .iter()
                 .any(|candidate| candidate.text == "TypeScript and sir dee json")
+        );
+        assert_eq!(
+            transcript
+                .recommended_candidate
+                .as_ref()
+                .map(|candidate| candidate.text.as_str()),
+            Some("TypeScript and sir dee json")
+        );
+        assert_eq!(
+            transcript
+                .rewrite_candidates
+                .first()
+                .map(|candidate| candidate.text.as_str()),
+            Some("TypeScript and sir dee json")
+        );
+    }
+
+    #[test]
+    fn built_in_glossary_candidates_cover_window_manager_terms() {
+        let context = typing_context(RewriteSurfaceKind::GenericText);
+        let policy = resolve_policy_context(
+            RewriteCorrectionPolicy::Balanced,
+            Some(&context),
+            &[RewriteCandidate {
+                kind: RewriteCandidateKind::Literal,
+                text: "I'm switching from sui to hyperland and neary.".into(),
+            }],
+            &[],
+            &[],
+        );
+
+        assert!(
+            policy
+                .glossary_candidates
+                .iter()
+                .any(|candidate| candidate.text == "I'm switching from Sway to Hyprland and niri.")
         );
     }
 

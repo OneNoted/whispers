@@ -84,9 +84,9 @@ timeout_ms = 30000
 # How long the hidden rewrite worker stays warm without requests (0 = never expire)
 idle_timeout_ms = 120000
 # Maximum characters accepted from the rewrite model
-max_output_chars = 1200
+max_output_chars = 8192
 # Maximum tokens to generate for rewritten output
-max_tokens = 256
+max_tokens = 768
 
 [agentic_rewrite]
 # App-aware rewrite policy TOML file
@@ -132,3 +132,19 @@ enabled = true
 # Custom sound file paths (empty = use bundled sounds)
 start_sound = ""
 stop_sound = ""
+
+[voice]
+# Experimental live voice mode. Leave live injection off until you trust it.
+live_inject = false
+# Show a rewrite-preview line in the OSD while dictating
+live_rewrite = false
+# How often to refresh the live ASR preview while recording
+partial_interval_ms = 400
+# Minimum time between live rewrite preview updates
+rewrite_interval_ms = 1400
+# Audio tail window retranscribed for each live ASR refresh
+context_window_ms = 8000
+# Minimum recorded audio before live ASR starts updating
+min_chunk_ms = 650
+# Freeze live injection if focus changes during the session
+freeze_on_focus_change = true

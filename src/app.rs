@@ -1,8 +1,4 @@
-use std::process::Child;
 use std::time::Instant;
-
-#[cfg(feature = "osd")]
-use std::process::Command;
 
 use crate::asr;
 use crate::audio::AudioRecorder;
@@ -11,6 +7,7 @@ use crate::context;
 use crate::error::Result;
 use crate::feedback::FeedbackPlayer;
 use crate::inject::TextInjector;
+use crate::osd::{OsdHandle, OsdMode};
 use crate::postprocess;
 use crate::session;
 
@@ -39,7 +36,7 @@ pub async fn run(config: Config) -> Result<()> {
     };
     let mut recorder = AudioRecorder::new(&config.audio);
     recorder.start()?;
-    let mut osd = spawn_osd();
+    let mut osd = OsdHandle::spawn(OsdMode::Meter);
     tracing::info!("recording... (run whispers again to stop)");
 
     let transcriber = asr::prepare_transcriber(&config)?;
@@ -55,13 +52,13 @@ pub async fn run(config: Config) -> Result<()> {
         }
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("interrupted, cancelling");
-            kill_osd(&mut osd);
+            osd.kill();
             recorder.stop()?;
             return Ok(());
         }
         _ = sigterm.recv() => {
             tracing::info!("terminated, cancelling");
-            kill_osd(&mut osd);
+            osd.kill();
             recorder.stop()?;
             return Ok(());
         }
@@ -69,7 +66,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Stop recording before playing feedback so the stop sound doesn't
     // leak into the mic.
-    kill_osd(&mut osd);
+    osd.kill();
     let audio = recorder.stop()?;
     feedback.play_stop();
     let sample_rate = config.audio.sample_rate;
@@ -144,7 +141,7 @@ pub async fn run(config: Config) -> Result<()> {
     let injector = TextInjector::new();
     match finalized.operation {
         postprocess::FinalizedOperation::Append => {
-            injector.inject(&finalized.text).await?;
+            injector.inject(&finalized.text, &injection_context).await?;
             if session_enabled {
                 session::record_append(
                     &config.session,
@@ -159,7 +156,7 @@ pub async fn run(config: Config) -> Result<()> {
             delete_graphemes,
         } => {
             injector
-                .replace_recent_text(delete_graphemes, &finalized.text)
+                .replace_recent_text(delete_graphemes, &finalized.text, &injection_context)
                 .await?;
             if session_enabled {
                 session::record_replace(
@@ -179,56 +176,4 @@ pub async fn run(config: Config) -> Result<()> {
         "dictation pipeline finished"
     );
     Ok(())
-}
-
-#[cfg(feature = "osd")]
-fn spawn_osd() -> Option<Child> {
-    // Look for whispers-osd next to our own binary first, then fall back to PATH
-    let osd_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|dir| dir.join("whispers-osd")))
-        .filter(|p| p.exists())
-        .unwrap_or_else(|| "whispers-osd".into());
-
-    match Command::new(&osd_path).spawn() {
-        Ok(child) => {
-            tracing::debug!("spawned whispers-osd (pid {})", child.id());
-            Some(child)
-        }
-        Err(e) => {
-            tracing::warn!(
-                "failed to spawn whispers-osd from {}: {e}",
-                osd_path.display()
-            );
-            None
-        }
-    }
-}
-
-#[cfg(not(feature = "osd"))]
-fn spawn_osd() -> Option<Child> {
-    None
-}
-
-fn kill_osd(child: &mut Option<Child>) {
-    if let Some(mut c) = child.take() {
-        let pid = c.id() as libc::pid_t;
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
-        }
-        let _ = c.wait();
-        tracing::debug!("whispers-osd (pid {pid}) terminated");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn kill_osd_none_is_noop() {
-        let mut child: Option<Child> = None;
-        kill_osd(&mut child);
-        assert!(child.is_none());
-    }
 }

@@ -31,10 +31,40 @@ pub enum CompletionShell {
     Nushell,
 }
 
+impl CompletionShell {
+    pub const fn all() -> [Self; 4] {
+        [Self::Bash, Self::Zsh, Self::Fish, Self::Nushell]
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Fish => "fish",
+            Self::Nushell => "nushell",
+        }
+    }
+
+    pub fn binary_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Bash => &["bash"],
+            Self::Zsh => &["zsh"],
+            Self::Fish => &["fish"],
+            Self::Nushell => &["nu", "nushell"],
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Guided setup for local, cloud, and experimental dictation paths
     Setup,
+
+    /// Show the active configuration, selected models, and runtime options
+    Status,
+
+    /// Experimental live voice mode with partial transcription preview
+    Voice,
 
     /// Transcribe an audio file (wav, mp3, flac, ogg, mp4/m4a)
     Transcribe {
@@ -332,6 +362,18 @@ mod tests {
             cli.command,
             Some(Command::Transcribe { raw: true, .. })
         ));
+    }
+
+    #[test]
+    fn parses_voice_command() {
+        let cli = Cli::try_parse_from(["whispers", "voice"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Voice)));
+    }
+
+    #[test]
+    fn parses_status_command() {
+        let cli = Cli::try_parse_from(["whispers", "status"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Status)));
     }
 
     #[test]

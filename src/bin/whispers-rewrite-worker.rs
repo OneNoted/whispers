@@ -2,6 +2,8 @@
 mod branding;
 #[path = "../rewrite.rs"]
 mod rewrite;
+#[path = "../rewrite_local.rs"]
+mod rewrite_local;
 #[path = "../rewrite_profile.rs"]
 mod rewrite_profile;
 #[path = "../rewrite_protocol.rs"]
@@ -14,7 +16,7 @@ use clap::Parser;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::rewrite::LocalRewriter;
+use crate::rewrite_local::LocalRewriter;
 use crate::rewrite_profile::ResolvedRewriteProfile;
 use crate::rewrite_protocol::{WorkerRequest, WorkerResponse};
 
@@ -30,10 +32,10 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = ResolvedRewriteProfile::Generic)]
     profile: ResolvedRewriteProfile,
 
-    #[arg(long, default_value_t = 256)]
+    #[arg(long, default_value_t = 768)]
     max_tokens: usize,
 
-    #[arg(long, default_value_t = 1200)]
+    #[arg(long, default_value_t = 8192)]
     max_output_chars: usize,
 
     #[arg(long, default_value_t = 120000)]

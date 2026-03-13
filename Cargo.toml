@@ -18,7 +18,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "tim
 cpal = "0.17"
 
 # Whisper transcription
-whisper-rs = "0.15"
+whisper-rs = "0.16"
 llama-cpp-2 = "0.1.138"
 
 # uinput virtual keyboard for paste keystroke
@@ -63,11 +63,19 @@ console = "0.16"
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client"], optional = true }
 wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+font8x8 = { version = "0.3", optional = true }
+fontdue = { version = "0.9", optional = true }
 
 [features]
 default = ["osd"]
 cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
-osd = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr"]
+osd = [
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:wayland-protocols-wlr",
+    "dep:font8x8",
+    "dep:fontdue",
+]
 
 [[bin]]
 name = "whispers"

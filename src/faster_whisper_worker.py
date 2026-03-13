@@ -14,6 +14,9 @@ from huggingface_hub import snapshot_download
 BEAM_SIZE = 3
 BEST_OF = 3
 CONDITION_ON_PREVIOUS_TEXT_MIN_SECONDS = 6.0
+LIVE_BEAM_SIZE = 1
+LIVE_BEST_OF = 1
+LIVE_MIN_DURATION_SECONDS = 0.25
 
 
 def cmd_download(repo_id: str, model_dir: str) -> int:
@@ -30,21 +33,45 @@ def make_model(model_dir: str, device: str, compute_type: str) -> WhisperModel:
     return WhisperModel(model_dir, device=device, compute_type=compute_type)
 
 
-def transcribe(model: WhisperModel, audio_f32_b64: str, sample_rate: int, language: str) -> dict:
+def empty_transcript(language: str) -> dict:
+    detected_language = None if language == "auto" else language
+    return {
+        "type": "transcript",
+        "transcript": {
+            "raw_text": "",
+            "detected_language": detected_language,
+            "segments": [],
+        },
+    }
+
+
+def transcribe(
+    model: WhisperModel,
+    audio_f32_b64: str,
+    sample_rate: int,
+    language: str,
+    live: bool,
+) -> dict:
     if sample_rate != 16000:
         raise ValueError(f"unsupported sample rate {sample_rate}; expected 16000")
 
     audio_bytes = base64.b64decode(audio_f32_b64.encode("ascii"))
     audio = np.frombuffer(audio_bytes, dtype=np.float32)
     duration_seconds = float(audio.size) / float(sample_rate)
+    if live:
+        if duration_seconds < LIVE_MIN_DURATION_SECONDS:
+            return empty_transcript(language)
+
     segments_iter, info = model.transcribe(
         audio,
         language=None if language == "auto" else language,
         task="transcribe",
-        beam_size=BEAM_SIZE,
-        best_of=BEST_OF,
+        beam_size=LIVE_BEAM_SIZE if live else BEAM_SIZE,
+        best_of=LIVE_BEST_OF if live else BEST_OF,
         condition_on_previous_text=(
-            duration_seconds >= CONDITION_ON_PREVIOUS_TEXT_MIN_SECONDS
+            False
+            if live
+            else duration_seconds >= CONDITION_ON_PREVIOUS_TEXT_MIN_SECONDS
         ),
         vad_filter=False,
         word_timestamps=False,
@@ -93,6 +120,7 @@ def handle_connection(conn: socket.socket, model: WhisperModel, language: str) -
                 request["audio_f32_b64"],
                 int(request["sample_rate"]),
                 language,
+                bool(request.get("live", False)),
             )
         except Exception as exc:  # noqa: BLE001
             response = {"type": "error", "message": str(exc)}

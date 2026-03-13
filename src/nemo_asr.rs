@@ -372,6 +372,7 @@ impl NemoAsrService {
         let mut payload = serde_json::to_vec(&AsrRequest::Transcribe {
             audio_f32_b64: base64::engine::general_purpose::STANDARD.encode(audio_bytes),
             sample_rate,
+            live: true,
         })
         .map_err(|e| WhsprError::Transcription(format!("failed to encode ASR request: {e}")))?;
         payload.push(b'\n');

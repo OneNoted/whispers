@@ -185,6 +185,13 @@ impl AudioRecorder {
         preprocess_audio(&mut buffer, self.config.sample_rate);
         Ok(buffer)
     }
+
+    pub fn snapshot(&self) -> Result<Vec<f32>> {
+        self.buffer
+            .lock()
+            .map(|buffer| buffer.clone())
+            .map_err(|_| WhsprError::Audio("audio buffer lock poisoned".into()))
+    }
 }
 
 pub fn preprocess_audio(samples: &mut Vec<f32>, sample_rate: u32) {
@@ -203,6 +210,31 @@ pub fn preprocess_audio(samples: &mut Vec<f32>, sample_rate: u32) {
     let after = audio_stats(samples);
     tracing::debug!(
         "audio preprocessing: len {} -> {}, rms {:.4} -> {:.4}, peak {:.4} -> {:.4}, gain {:.2}x",
+        before_len,
+        samples.len(),
+        before.rms,
+        after.rms,
+        before.peak,
+        after.peak,
+        gain
+    );
+}
+
+pub fn preprocess_live_audio(samples: &mut Vec<f32>, sample_rate: u32) {
+    if samples.is_empty() || sample_rate == 0 {
+        return;
+    }
+
+    let before_len = samples.len();
+    let before = audio_stats(samples);
+
+    remove_dc_offset(samples);
+    apply_highpass(samples, sample_rate, HIGHPASS_CUTOFF_HZ);
+    let gain = normalize_peak(samples);
+
+    let after = audio_stats(samples);
+    tracing::debug!(
+        "live audio preprocessing: len {} -> {}, rms {:.4} -> {:.4}, peak {:.4} -> {:.4}, gain {:.2}x",
         before_len,
         samples.len(),
         before.rms,
