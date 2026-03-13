@@ -39,12 +39,14 @@ flash_attn = true
 idle_timeout_ms = 120000
 
 [postprocess]
-# "raw" keeps output close to Whisper, "advanced_local" enables the rewrite model
+# "raw" keeps output close to Whisper
+# "advanced_local" enables the rewrite model
+# "agentic_rewrite" adds app-aware policy and glossary guidance on top of the rewrite model
 # "legacy_basic" is deprecated and only kept for older cleanup-based configs
 mode = "raw"
 
 [session]
-# Enable short-lived session backtracking in advanced_local mode
+# Enable short-lived session backtracking in rewrite modes
 enabled = true
 # How many recent dictation entries to keep in the runtime session ledger
 max_entries = 3
@@ -85,6 +87,14 @@ idle_timeout_ms = 120000
 max_output_chars = 1200
 # Maximum tokens to generate for rewritten output
 max_tokens = 256
+
+[agentic_rewrite]
+# App-aware rewrite policy TOML file
+policy_path = "~/.local/share/whispers/app-rewrite-policy.toml"
+# Technical glossary TOML file
+glossary_path = "~/.local/share/whispers/technical-glossary.toml"
+# Default correction policy ("conservative", "balanced", or "aggressive")
+default_correction_policy = "balanced"
 
 [cloud]
 # Cloud provider ("openai" or "openai_compatible")

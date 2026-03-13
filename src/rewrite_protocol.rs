@@ -1,3 +1,4 @@
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub struct RewriteTranscript {
     pub edit_hypotheses: Vec<RewriteEditHypothesis>,
     pub rewrite_candidates: Vec<RewriteCandidate>,
     pub recommended_candidate: Option<RewriteCandidate>,
+    #[serde(default)]
+    pub policy_context: RewritePolicyContext,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,6 +90,21 @@ pub struct RewriteCandidate {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RewritePolicyContext {
+    pub correction_policy: RewriteCorrectionPolicy,
+    pub matched_rule_names: Vec<String>,
+    pub effective_rule_instructions: Vec<String>,
+    pub active_glossary_terms: Vec<RewritePolicyGlossaryTerm>,
+    pub glossary_candidates: Vec<RewriteCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RewritePolicyGlossaryTerm {
+    pub term: String,
+    pub aliases: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RewriteEditAction {
@@ -150,12 +168,22 @@ pub enum RewriteTailShape {
     Clause,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteCorrectionPolicy {
+    Conservative,
+    #[default]
+    Balanced,
+    Aggressive,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RewriteCandidateKind {
     Literal,
     ConservativeCorrection,
     AggressiveCorrection,
+    GlossaryCorrection,
     SpanReplacement,
     ClauseReplacement,
     SentenceReplacement,
@@ -166,7 +194,7 @@ pub enum RewriteCandidateKind {
     CancelPreviousSentence,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum RewriteSurfaceKind {
     Browser,
@@ -197,4 +225,35 @@ pub enum WorkerRequest {
 pub enum WorkerResponse {
     Result { text: String },
     Error { message: String },
+}
+
+impl RewriteCorrectionPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conservative => "conservative",
+            Self::Balanced => "balanced",
+            Self::Aggressive => "aggressive",
+        }
+    }
+}
+
+impl RewriteSurfaceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Browser => "browser",
+            Self::Terminal => "terminal",
+            Self::Editor => "editor",
+            Self::GenericText => "generic_text",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl RewritePolicyContext {
+    pub fn is_active(&self) -> bool {
+        !self.matched_rule_names.is_empty()
+            || !self.effective_rule_instructions.is_empty()
+            || !self.active_glossary_terms.is_empty()
+            || !self.glossary_candidates.is_empty()
+    }
 }

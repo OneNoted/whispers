@@ -1,3 +1,4 @@
+mod agentic_rewrite;
 mod app;
 mod asr;
 mod asr_model;
@@ -18,6 +19,7 @@ mod model;
 mod nemo_asr;
 mod personalization;
 mod postprocess;
+mod rewrite;
 mod rewrite_model;
 mod rewrite_profile;
 mod rewrite_protocol;
@@ -35,10 +37,11 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::{
-    AsrModelAction, Cli, CloudAction, Command, DictionaryAction, ModelAction, RewriteModelAction,
-    SnippetAction,
+    AppRuleAction, AsrModelAction, Cli, CloudAction, Command, DictionaryAction, GlossaryAction,
+    ModelAction, RewriteModelAction, SnippetAction,
 };
 use crate::config::Config;
+use crate::rewrite_protocol::RewriteSurfaceKind;
 
 struct PidLock {
     path: PathBuf,
@@ -188,6 +191,20 @@ fn init_tracing(verbose: u8) {
         .init();
 }
 
+fn build_context_matcher(
+    surface_kind: Option<RewriteSurfaceKind>,
+    app_id: Option<&String>,
+    window_title_contains: Option<&String>,
+    browser_domain_contains: Option<&String>,
+) -> agentic_rewrite::ContextMatcher {
+    agentic_rewrite::ContextMatcher {
+        surface_kind,
+        app_id: app_id.cloned(),
+        window_title_contains: window_title_contains.cloned(),
+        browser_domain_contains: browser_domain_contains.cloned(),
+    }
+}
+
 async fn transcribe_file(
     cli: &Cli,
     file: &Path,
@@ -300,6 +317,58 @@ async fn main() -> crate::error::Result<()> {
             }
             DictionaryAction::Remove { phrase } => {
                 personalization::remove_dictionary(cli.config.as_deref(), phrase)
+            }
+        },
+        Some(Command::AppRule { action }) => match action {
+            AppRuleAction::Path => agentic_rewrite::print_app_rule_path(cli.config.as_deref()),
+            AppRuleAction::List => agentic_rewrite::list_app_rules(cli.config.as_deref()),
+            AppRuleAction::Add {
+                name,
+                instructions,
+                surface_kind,
+                app_id,
+                window_title_contains,
+                browser_domain_contains,
+                correction_policy,
+            } => agentic_rewrite::add_app_rule(
+                cli.config.as_deref(),
+                name,
+                instructions,
+                build_context_matcher(
+                    *surface_kind,
+                    app_id.as_ref(),
+                    window_title_contains.as_ref(),
+                    browser_domain_contains.as_ref(),
+                ),
+                *correction_policy,
+            ),
+            AppRuleAction::Remove { name } => {
+                agentic_rewrite::remove_app_rule(cli.config.as_deref(), name)
+            }
+        },
+        Some(Command::Glossary { action }) => match action {
+            GlossaryAction::Path => agentic_rewrite::print_glossary_path(cli.config.as_deref()),
+            GlossaryAction::List => agentic_rewrite::list_glossary(cli.config.as_deref()),
+            GlossaryAction::Add {
+                term,
+                aliases,
+                surface_kind,
+                app_id,
+                window_title_contains,
+                browser_domain_contains,
+            } => agentic_rewrite::add_glossary_entry(
+                cli.config.as_deref(),
+                term,
+                aliases,
+                build_context_matcher(
+                    *surface_kind,
+                    app_id.as_ref(),
+                    window_title_contains.as_ref(),
+                    browser_domain_contains.as_ref(),
+                ),
+            ),
+            GlossaryAction::Remove { term } => {
+                agentic_rewrite::remove_glossary_entry(cli.config.as_deref(), term)
             }
         },
         Some(Command::Cloud { action }) => match action {

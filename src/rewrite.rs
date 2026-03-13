@@ -242,7 +242,7 @@ pub fn build_prompt(
     custom_instructions: Option<&str>,
 ) -> std::result::Result<RewritePrompt, String> {
     Ok(RewritePrompt {
-        system: build_system_instructions(profile, custom_instructions),
+        system: build_system_instructions(transcript, profile, custom_instructions),
         user: build_user_message(transcript),
     })
 }
@@ -258,10 +258,26 @@ pub fn resolved_profile_for_cloud(profile: RewriteProfile) -> ResolvedRewritePro
 }
 
 fn build_system_instructions(
+    transcript: &RewriteTranscript,
     profile: ResolvedRewriteProfile,
     custom_instructions: Option<&str>,
 ) -> String {
     let mut instructions = rewrite_instructions(profile).to_string();
+    if has_policy_context(transcript) {
+        let policy_context = &transcript.policy_context;
+        instructions.push_str("\n\nCorrection policy contract:\n");
+        instructions.push_str(correction_policy_contract(
+            policy_context.correction_policy,
+        ));
+        if !policy_context.effective_rule_instructions.is_empty() {
+            instructions.push_str("\n\nMatched app rewrite policy instructions:\n");
+            for instruction in &policy_context.effective_rule_instructions {
+                instructions.push_str("- ");
+                instructions.push_str(instruction.trim());
+                instructions.push('\n');
+            }
+        }
+    }
     if let Some(custom) = custom_instructions
         .map(str::trim)
         .filter(|text| !text.is_empty())
@@ -270,6 +286,22 @@ fn build_system_instructions(
         instructions.push_str(custom);
     }
     instructions
+}
+
+fn correction_policy_contract(
+    policy: crate::rewrite_protocol::RewriteCorrectionPolicy,
+) -> &'static str {
+    match policy {
+        crate::rewrite_protocol::RewriteCorrectionPolicy::Conservative => {
+            "Conservative: stay close to explicit rewrite candidates and glossary evidence. If uncertain, prefer candidate-preserving output over freer rewriting."
+        }
+        crate::rewrite_protocol::RewriteCorrectionPolicy::Balanced => {
+            "Balanced: allow stronger technical correction when the glossary and app context support it, but still bias toward candidate-backed output."
+        }
+        crate::rewrite_protocol::RewriteCorrectionPolicy::Aggressive => {
+            "Aggressive: allow freer technical correction and contextual cleanup while still returning only final text within the provided bounds."
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -357,6 +389,7 @@ fn build_user_message(transcript: &RewriteTranscript) -> String {
     let raw = transcript.raw_text.trim();
     let edit_intents = render_edit_intents(transcript);
     let edit_signals = render_edit_signals(transcript);
+    let agentic_context = render_agentic_context(transcript);
     let route = rewrite_route(transcript);
     tracing::debug!(
         route = ?route,
@@ -370,6 +403,7 @@ fn build_user_message(transcript: &RewriteTranscript) -> String {
         RewriteRoute::SessionCandidateAdjudication => {
             let typing_context = render_typing_context(transcript);
             let recent_session_entries = render_recent_session_entries(transcript);
+            let agentic_policy_context = render_agentic_policy_context(transcript);
             let session_candidates = render_session_backtrack_candidates(transcript);
             let recommended_session_candidate = render_recommended_session_candidate(transcript);
             let rewrite_candidates = render_rewrite_candidates(transcript);
@@ -392,6 +426,7 @@ Active typing context:\n\
 {typing_context}\
 Recent dictation session:\n\
 {recent_session_entries}\
+{agentic_policy_context}\
 Session backtrack candidates:\n\
 {session_candidates}\
 {recommended_session_candidate}\
@@ -425,6 +460,7 @@ If the cue is an exact strong match for phrases like scratch that, never mind, o
             tracing::trace!("rewrite candidates:\n{rewrite_candidates}");
             format!(
                 "Language: {language}\n\
+{agentic_context}\
 Structured edit hypotheses:\n\
 {edit_hypotheses}\
 Structured edit signals:\n\
@@ -457,6 +493,7 @@ Final text:"
         }
         RewriteRoute::ResolvedCorrection => format!(
             "Language: {language}\n\
+{agentic_context}\
 Structured edit signals:\n\
 {edit_signals}\
 Structured edit intents:\n\
@@ -464,13 +501,16 @@ Structured edit intents:\n\
 Self-corrections were already resolved before rewriting.\n\
 Use only this correction-aware transcript as the source text:\n\
 {correction_aware}\n\
+{agentic_candidates}\
 Do not restore any canceled wording from earlier in the utterance.\n\
-Final text:"
+Final text:",
+            agentic_candidates = render_agentic_candidates(transcript),
         ),
         RewriteRoute::Fast => {
             let recent_segments = render_recent_segments(transcript, 4);
             format!(
                 "Language: {language}\n\
+{agentic_context}\
 Structured edit signals:\n\
 {edit_signals}\
 Structured edit intents:\n\
@@ -478,13 +518,79 @@ Structured edit intents:\n\
 Correction-aware transcript:\n\
 {correction_aware}\n\
 Treat the correction-aware transcript as authoritative for explicit spoken edits.\n\
+{agentic_candidates}\
 \
 Recent segments:\n\
 {recent_segments}\n\
 Final text:",
+                agentic_candidates = render_agentic_candidates(transcript),
             )
         }
     }
+}
+
+fn render_agentic_context(transcript: &RewriteTranscript) -> String {
+    if !has_policy_context(transcript) {
+        return String::new();
+    }
+    format!(
+        "{}{}",
+        render_agentic_runtime_context(transcript),
+        render_agentic_policy_context(transcript)
+    )
+}
+
+fn render_agentic_policy_context(transcript: &RewriteTranscript) -> String {
+    if !has_policy_context(transcript) {
+        return String::new();
+    }
+    let policy_context = &transcript.policy_context;
+
+    format!(
+        "Agentic correction policy:\n\
+- mode: {}\n\
+Matched app rewrite rules:\n\
+{matched_rules}\
+Matched app policy instructions:\n\
+{effective_instructions}\
+Active glossary terms:\n\
+{glossary_terms}\
+",
+        policy_context.correction_policy.as_str(),
+        matched_rules = render_matched_rule_names(transcript),
+        effective_instructions = render_effective_rule_instructions(transcript),
+        glossary_terms = render_active_glossary_terms(transcript),
+    )
+}
+
+fn render_agentic_runtime_context(transcript: &RewriteTranscript) -> String {
+    has_policy_context(transcript)
+        .then(|| {
+            format!(
+                "Active typing context:\n\
+{}\
+Recent dictation session:\n\
+{}",
+                render_typing_context(transcript),
+                render_recent_session_entries(transcript),
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn render_agentic_candidates(transcript: &RewriteTranscript) -> String {
+    has_policy_context(transcript)
+        .then(|| {
+            format!(
+                "Available rewrite candidates:\n\
+{}\
+Glossary-backed candidates:\n\
+{}",
+                render_rewrite_candidates(transcript),
+                render_glossary_candidates(transcript)
+            )
+        })
+        .unwrap_or_default()
 }
 
 fn rewrite_route(transcript: &RewriteTranscript) -> RewriteRoute {
@@ -650,6 +756,9 @@ fn render_rewrite_candidates(transcript: &RewriteTranscript) -> String {
             crate::rewrite_protocol::RewriteCandidateKind::AggressiveCorrection => {
                 "aggressive_correction (use when canceled wording should be removed more fully)"
             }
+            crate::rewrite_protocol::RewriteCandidateKind::GlossaryCorrection => {
+                "glossary_correction (supported by active glossary aliases)"
+            }
             crate::rewrite_protocol::RewriteCandidateKind::SpanReplacement => {
                 "span_replacement (replace only the corrected phrase)"
             }
@@ -700,7 +809,7 @@ fn render_typing_context(transcript: &RewriteTranscript) -> String {
         .as_ref()
         .map(|context| {
             format!(
-                "- focus_fingerprint: {}\n- app_id: {}\n- window_title: {}\n- surface_kind: {}\n",
+                "- focus_fingerprint: {}\n- app_id: {}\n- window_title: {}\n- surface_kind: {}\n- browser_domain: {}\n",
                 context.focus_fingerprint,
                 context.app_id.as_deref().unwrap_or("unknown"),
                 context.window_title.as_deref().unwrap_or("unknown"),
@@ -710,7 +819,8 @@ fn render_typing_context(transcript: &RewriteTranscript) -> String {
                     crate::rewrite_protocol::RewriteSurfaceKind::Editor => "editor",
                     crate::rewrite_protocol::RewriteSurfaceKind::GenericText => "generic_text",
                     crate::rewrite_protocol::RewriteSurfaceKind::Unknown => "unknown",
-                }
+                },
+                context.browser_domain.as_deref().unwrap_or("unknown"),
             )
         })
         .unwrap_or_else(|| "- none available\n".to_string())
@@ -824,6 +934,74 @@ fn render_aggressive_candidate(transcript: &RewriteTranscript) -> String {
         .unwrap_or_default()
 }
 
+fn render_matched_rule_names(transcript: &RewriteTranscript) -> String {
+    if !has_policy_context(transcript) {
+        return "- none\n".to_string();
+    }
+    let policy_context = &transcript.policy_context;
+    if policy_context.matched_rule_names.is_empty() {
+        return "- none\n".to_string();
+    }
+    policy_context
+        .matched_rule_names
+        .iter()
+        .map(|name| format!("- {name}\n"))
+        .collect()
+}
+
+fn render_effective_rule_instructions(transcript: &RewriteTranscript) -> String {
+    if !has_policy_context(transcript) {
+        return "- none\n".to_string();
+    }
+    let policy_context = &transcript.policy_context;
+    if policy_context.effective_rule_instructions.is_empty() {
+        return "- none\n".to_string();
+    }
+    policy_context
+        .effective_rule_instructions
+        .iter()
+        .map(|instruction| format!("- {}\n", instruction.trim()))
+        .collect()
+}
+
+fn render_active_glossary_terms(transcript: &RewriteTranscript) -> String {
+    if !has_policy_context(transcript) {
+        return "- none\n".to_string();
+    }
+    let policy_context = &transcript.policy_context;
+    if policy_context.active_glossary_terms.is_empty() {
+        return "- none\n".to_string();
+    }
+    policy_context
+        .active_glossary_terms
+        .iter()
+        .map(|entry| format!("- {} <- [{}]\n", entry.term, entry.aliases.join(", ")))
+        .collect()
+}
+
+fn render_glossary_candidates(transcript: &RewriteTranscript) -> String {
+    if !has_policy_context(transcript) {
+        return "- none\n".to_string();
+    }
+    let policy_context = &transcript.policy_context;
+    if policy_context.glossary_candidates.is_empty() {
+        return "- none\n".to_string();
+    }
+    policy_context
+        .glossary_candidates
+        .iter()
+        .map(|candidate| format!("- {}\n", candidate.text))
+        .collect()
+}
+
+fn has_policy_context(transcript: &RewriteTranscript) -> bool {
+    let policy_context = &transcript.policy_context;
+    !policy_context.matched_rule_names.is_empty()
+        || !policy_context.effective_rule_instructions.is_empty()
+        || !policy_context.active_glossary_terms.is_empty()
+        || !policy_context.glossary_candidates.is_empty()
+}
+
 #[allow(dead_code)]
 fn effective_max_tokens(max_tokens: usize, transcript: &RewriteTranscript) -> usize {
     let word_count = transcript
@@ -911,9 +1089,10 @@ mod tests {
         RewriteCandidate, RewriteCandidateKind, RewriteEditAction, RewriteEditHypothesis,
         RewriteEditHypothesisMatchSource, RewriteEditIntent, RewriteEditSignal,
         RewriteEditSignalKind, RewriteEditSignalScope, RewriteEditSignalStrength,
-        RewriteIntentConfidence, RewriteReplacementScope, RewriteSessionBacktrackCandidate,
-        RewriteSessionBacktrackCandidateKind, RewriteSessionEntry, RewriteSurfaceKind,
-        RewriteTailShape, RewriteTranscript, RewriteTranscriptSegment, RewriteTypingContext,
+        RewriteIntentConfidence, RewritePolicyContext, RewriteReplacementScope,
+        RewriteSessionBacktrackCandidate, RewriteSessionBacktrackCandidateKind,
+        RewriteSessionEntry, RewriteSurfaceKind, RewriteTailShape, RewriteTranscript,
+        RewriteTranscriptSegment, RewriteTypingContext,
     };
 
     fn correction_transcript() -> RewriteTranscript {
@@ -973,6 +1152,7 @@ mod tests {
                 kind: RewriteCandidateKind::Literal,
                 text: "Hi there, this is a test. Wait, no. Hi there.".into(),
             }),
+            policy_context: RewritePolicyContext::default(),
         }
     }
 
@@ -1005,6 +1185,7 @@ mod tests {
                 },
             ],
             recommended_candidate: None,
+            policy_context: RewritePolicyContext::default(),
         }
     }
 
@@ -1025,6 +1206,7 @@ mod tests {
     #[test]
     fn custom_instructions_append_to_system_prompt() {
         let instructions = build_system_instructions(
+            &correction_transcript(),
             ResolvedRewriteProfile::Qwen,
             Some("Keep product names exact."),
         );
@@ -1120,6 +1302,7 @@ mod tests {
                 text: "Hi there.".into(),
             }],
             recommended_candidate: None,
+            policy_context: RewritePolicyContext::default(),
         };
 
         let prompt = build_user_message(&transcript);
@@ -1151,6 +1334,7 @@ mod tests {
                 text: "hi there".into(),
             }],
             recommended_candidate: None,
+            policy_context: RewritePolicyContext::default(),
         };
         assert_eq!(effective_max_tokens(256, &short), 48);
 
@@ -1172,6 +1356,7 @@ mod tests {
                 text: "word ".repeat(80),
             }],
             recommended_candidate: None,
+            policy_context: RewritePolicyContext::default(),
         };
         assert_eq!(effective_max_tokens(256, &long), 184);
     }
@@ -1238,6 +1423,7 @@ mod tests {
                 kind: RewriteCandidateKind::SentenceReplacement,
                 text: "Hi".into(),
             }),
+            policy_context: RewritePolicyContext::default(),
         };
 
         let prompt = build_user_message(&transcript);

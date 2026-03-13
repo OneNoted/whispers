@@ -549,6 +549,7 @@ mod tests {
                 kind: crate::rewrite_protocol::RewriteCandidateKind::SentenceReplacement,
                 text: "Hi".into(),
             }),
+            policy_context: crate::rewrite_protocol::RewritePolicyContext::default(),
         };
 
         let recent = EligibleSessionEntry {
@@ -603,6 +604,7 @@ mod tests {
             edit_hypotheses: Vec::new(),
             rewrite_candidates: Vec::new(),
             recommended_candidate: None,
+            policy_context: crate::rewrite_protocol::RewritePolicyContext::default(),
         };
 
         let recent = EligibleSessionEntry {

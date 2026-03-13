@@ -31,7 +31,7 @@ pub async fn run(config: Config) -> Result<()> {
     // doesn't leak into the mic.
     feedback.play_start();
     let recording_context = context::capture_typing_context();
-    let session_enabled = config.postprocess.mode == PostprocessMode::AdvancedLocal;
+    let session_enabled = config.postprocess.mode.uses_rewrite();
     let recent_session = if session_enabled {
         session::load_recent_entry(&config.session, &recording_context)?
     } else {

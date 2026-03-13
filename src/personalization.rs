@@ -9,7 +9,8 @@ use crate::rewrite_protocol::{
     RewriteCandidate, RewriteCandidateKind, RewriteEditAction, RewriteEditHypothesis,
     RewriteEditHypothesisMatchSource, RewriteEditIntent, RewriteEditSignal, RewriteEditSignalKind,
     RewriteEditSignalScope, RewriteEditSignalStrength, RewriteIntentConfidence,
-    RewriteReplacementScope, RewriteTailShape, RewriteTranscript, RewriteTranscriptSegment,
+    RewritePolicyContext, RewriteReplacementScope, RewriteTailShape, RewriteTranscript,
+    RewriteTranscriptSegment,
 };
 use crate::transcribe::Transcript;
 
@@ -220,6 +221,7 @@ pub fn build_rewrite_transcript(
         edit_hypotheses,
         rewrite_candidates,
         recommended_candidate,
+        policy_context: RewritePolicyContext::default(),
     }
 }
 
@@ -695,9 +697,10 @@ fn candidate_priority(kind: RewriteCandidateKind) -> u8 {
         RewriteCandidateKind::CancelPreviousSentence => 5,
         RewriteCandidateKind::CancelPreviousClause => 6,
         RewriteCandidateKind::FollowingReplacement => 7,
-        RewriteCandidateKind::ConservativeCorrection => 8,
-        RewriteCandidateKind::DropCueOnly => 9,
-        RewriteCandidateKind::Literal => 10,
+        RewriteCandidateKind::GlossaryCorrection => 8,
+        RewriteCandidateKind::ConservativeCorrection => 9,
+        RewriteCandidateKind::DropCueOnly => 10,
+        RewriteCandidateKind::Literal => 11,
     }
 }
 

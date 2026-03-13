@@ -12,6 +12,7 @@ use crate::ui::SetupUi;
 struct SetupSelections {
     asr_model: &'static AsrModelInfo,
     rewrite_model: Option<&'static str>,
+    postprocess_mode: PostprocessMode,
     cloud: CloudSetup,
 }
 
@@ -65,8 +66,10 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
     ui.blank();
 
     let mut rewrite_model = None;
+    let mut postprocess_mode = PostprocessMode::Raw;
     if ui.confirm("Enable smarter local rewrite cleanup?", false)? {
         rewrite_model = Some(choose_rewrite_model(&ui, "Choose a local rewrite model", 1).await?);
+        postprocess_mode = choose_rewrite_mode(&ui)?;
     }
 
     let cloud = if ui.confirm("Add optional cloud ASR or rewrite?", false)? {
@@ -74,10 +77,14 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
     } else {
         CloudSetup::default()
     };
+    if cloud.rewrite_enabled && postprocess_mode == PostprocessMode::Raw {
+        postprocess_mode = choose_rewrite_mode(&ui)?;
+    }
 
     let selections = SetupSelections {
         asr_model,
         rewrite_model,
+        postprocess_mode,
         cloud,
     };
 
@@ -96,6 +103,7 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
         &selections.cloud,
     )?;
     apply_cloud_settings(&ui, &config_path, &selections.cloud)?;
+    maybe_create_agentic_starter_files(&ui, &config_path, &selections)?;
     cleanup_stale_asr_workers(&ui, &config_path)?;
 
     if let Some(rewrite_model) = selections.rewrite_model {
@@ -141,11 +149,11 @@ fn apply_postprocess_selection(
     config_path: &Path,
     selections: &SetupSelections,
 ) -> Result<()> {
-    if selections.cloud.rewrite_enabled || selections.rewrite_model.is_some() {
-        config::update_config_postprocess_mode(config_path, PostprocessMode::AdvancedLocal)?;
-    } else {
+    if selections.postprocess_mode == PostprocessMode::Raw {
         config::update_config_postprocess_mode(config_path, PostprocessMode::Raw)?;
         ui.print_info("Rewrite cleanup: disabled (raw mode).");
+    } else {
+        config::update_config_postprocess_mode(config_path, selections.postprocess_mode)?;
     }
     Ok(())
 }
@@ -294,6 +302,19 @@ async fn choose_rewrite_model(
     Ok(chosen.name)
 }
 
+fn choose_rewrite_mode(ui: &SetupUi) -> Result<PostprocessMode> {
+    let items = [
+        "advanced_local: smart rewrite cleanup with current bounded-candidate behavior",
+        "agentic_rewrite: app-aware rewrite with policy and technical glossary support",
+    ];
+    let selection = ui.select("Choose the rewrite mode", &items, 1)?;
+    Ok(if selection == 0 {
+        PostprocessMode::AdvancedLocal
+    } else {
+        PostprocessMode::AgenticRewrite
+    })
+}
+
 async fn configure_cloud(
     ui: &SetupUi,
     rewrite_model: &mut Option<&'static str>,
@@ -408,19 +429,22 @@ fn print_setup_summary(ui: &SetupUi, selections: &SetupSelections) {
 
     match (selections.cloud.rewrite_enabled, selections.rewrite_model) {
         (true, Some(model)) => println!(
-            "  {}: cloud with local fallback ({})",
+            "  {}: cloud with local fallback ({}, mode: {})",
             crate::ui::summary_key("Rewrite"),
-            crate::ui::value(model)
+            crate::ui::value(model),
+            selections.postprocess_mode.as_str()
         ),
         (true, None) => println!(
-            "  {}: cloud only (fallback: {})",
+            "  {}: cloud only (fallback: {}, mode: {})",
             crate::ui::summary_key("Rewrite"),
-            selections.cloud.rewrite_fallback.as_str()
+            selections.cloud.rewrite_fallback.as_str(),
+            selections.postprocess_mode.as_str()
         ),
         (false, Some(model)) => println!(
-            "  {}: local ({})",
+            "  {}: local ({}, mode: {})",
             crate::ui::summary_key("Rewrite"),
-            crate::ui::value(model)
+            crate::ui::value(model),
+            selections.postprocess_mode.as_str()
         ),
         (false, None) => println!(
             "  {}: disabled (raw mode)",
@@ -476,6 +500,23 @@ fn apply_runtime_backend_selection(
         RewriteFallback::Local
     };
     config::update_config_rewrite_runtime(config_path, rewrite_backend, rewrite_fallback)?;
+    Ok(())
+}
+
+fn maybe_create_agentic_starter_files(
+    ui: &SetupUi,
+    config_path: &Path,
+    selections: &SetupSelections,
+) -> Result<()> {
+    if selections.postprocess_mode != PostprocessMode::AgenticRewrite {
+        return Ok(());
+    }
+
+    let config = config::Config::load(Some(config_path))?;
+    let created = crate::agentic_rewrite::ensure_starter_files(&config)?;
+    for path in created {
+        ui.print_info(format!("Created agentic rewrite starter file: {}", path));
+    }
     Ok(())
 }
 

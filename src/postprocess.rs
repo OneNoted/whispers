@@ -2,11 +2,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::agentic_rewrite;
 use crate::cleanup;
 use crate::cloud;
 use crate::config::{Config, PostprocessMode, RewriteBackend, RewriteFallback};
 use crate::context::TypingContext;
 use crate::personalization::{self, PersonalizationRules};
+use crate::rewrite_protocol::{RewriteCorrectionPolicy, RewriteTranscript};
 use crate::rewrite_model;
 use crate::rewrite_protocol::RewriteSessionBacktrackCandidateKind;
 use crate::rewrite_worker::{self, RewriteService};
@@ -38,7 +40,9 @@ pub fn raw_text(transcript: &Transcript) -> String {
 fn base_text(config: &Config, transcript: &Transcript) -> String {
     match config.postprocess.mode {
         PostprocessMode::LegacyBasic => cleanup::clean_transcript(transcript, &config.cleanup),
-        PostprocessMode::AdvancedLocal => cleanup::correction_aware_text(transcript),
+        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
+            cleanup::correction_aware_text(transcript)
+        }
         PostprocessMode::Raw => raw_text(transcript),
     }
 }
@@ -79,7 +83,7 @@ pub async fn finalize_transcript(
             },
             &rules,
         ),
-        PostprocessMode::AdvancedLocal => {
+        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
             rewrite_transcript_or_fallback(
                 config,
                 &transcript,
@@ -106,7 +110,7 @@ pub async fn wait_for_feedback_drain() {
 }
 
 pub fn prepare_rewrite_service(config: &Config) -> Option<RewriteService> {
-    if config.postprocess.mode != PostprocessMode::AdvancedLocal {
+    if !config.postprocess.mode.uses_rewrite() {
         return None;
     }
 
@@ -158,11 +162,15 @@ async fn rewrite_transcript_or_fallback(
     }
     let mut rewrite_transcript = personalization::build_rewrite_transcript(transcript, rules);
     rewrite_transcript.typing_context = typing_context.and_then(session::to_rewrite_typing_context);
+    if config.postprocess.mode == PostprocessMode::AgenticRewrite {
+        agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
+    }
     let session_plan = session::build_backtrack_plan(&rewrite_transcript, recent_session);
     rewrite_transcript.recent_session_entries = session_plan.recent_entries.clone();
     rewrite_transcript.session_backtrack_candidates = session_plan.candidates.clone();
     rewrite_transcript.recommended_session_candidate = session_plan.recommended.clone();
     tracing::debug!(
+        mode = config.postprocess.mode.as_str(),
         edit_hypotheses = rewrite_transcript.edit_hypotheses.len(),
         rewrite_candidates = rewrite_transcript.rewrite_candidates.len(),
         session_backtrack_candidates = rewrite_transcript.session_backtrack_candidates.len(),
@@ -171,7 +179,7 @@ async fn rewrite_transcript_or_fallback(
             .as_ref()
             .map(|candidate| candidate.text.as_str())
             .unwrap_or(""),
-        "advanced_local prepared rewrite request"
+        "prepared rewrite request"
     );
     let custom_instructions = personalization::custom_instructions(rules);
     let deterministic_session_replacement = session_plan.deterministic_replacement_text.clone();
@@ -179,7 +187,8 @@ async fn rewrite_transcript_or_fallback(
     if let Some(text) = deterministic_session_replacement {
         tracing::debug!(
             output_len = text.len(),
-            "advanced_local using deterministic session replacement"
+            mode = config.postprocess.mode.as_str(),
+            "using deterministic session replacement"
         );
         let operation = rewrite_transcript
             .recommended_session_candidate
@@ -274,15 +283,24 @@ async fn rewrite_transcript_or_fallback(
         });
 
     let (base, rewrite_used) = match rewrite_result {
-        Ok(text) if !text.trim().is_empty() => {
+        Ok(text) if rewrite_output_accepted(config, &rewrite_transcript, &text) => {
             tracing::debug!(
                 output_len = text.len(),
-                "advanced_local rewrite applied successfully"
+                mode = config.postprocess.mode.as_str(),
+                "rewrite applied successfully"
             );
             (text, true)
         }
-        Ok(_) => {
+        Ok(text) if text.trim().is_empty() => {
             tracing::warn!("rewrite model returned empty text; using fallback");
+            (fallback, false)
+        }
+        Ok(text) => {
+            tracing::warn!(
+                mode = config.postprocess.mode.as_str(),
+                output_len = text.len(),
+                "rewrite output failed acceptance guard; using fallback"
+            );
             (fallback, false)
         }
         Err(err) => {
@@ -369,5 +387,26 @@ impl FinalizedTranscript {
     fn with_operation(mut self, operation: FinalizedOperation) -> Self {
         self.operation = operation;
         self
+    }
+}
+
+fn rewrite_output_accepted(
+    config: &Config,
+    rewrite_transcript: &RewriteTranscript,
+    text: &str,
+) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+
+    if config.postprocess.mode != PostprocessMode::AgenticRewrite {
+        return true;
+    }
+
+    match rewrite_transcript.policy_context.correction_policy {
+        RewriteCorrectionPolicy::Conservative => {
+            agentic_rewrite::conservative_output_allowed(rewrite_transcript, text)
+        }
+        RewriteCorrectionPolicy::Balanced | RewriteCorrectionPolicy::Aggressive => true,
     }
 }
