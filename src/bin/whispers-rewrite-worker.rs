@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 #[path = "../branding.rs"]
 mod branding;
 #[path = "../rewrite.rs"]

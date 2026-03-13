@@ -1,34 +1,6 @@
 use crate::transcribe::Transcript;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CleanupConfig {
-    pub enabled: bool,
-    pub profile: CleanupProfile,
-    pub spoken_formatting: bool,
-    pub backtrack: bool,
-    pub remove_fillers: bool,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CleanupProfile {
-    #[default]
-    Basic,
-    Aggressive,
-}
-
-impl Default for CleanupConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            profile: CleanupProfile::Basic,
-            spoken_formatting: true,
-            backtrack: true,
-            remove_fillers: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum Piece {
     Word(String),
     Punctuation(char),
@@ -54,29 +26,6 @@ struct CorrectionTrigger {
     min_context_words: usize,
 }
 
-pub fn clean_transcript(transcript: &Transcript, config: &CleanupConfig) -> String {
-    let raw = transcript.raw_text.trim();
-    if raw.is_empty()
-        || !config.enabled
-        || !supports_cleanup_language(transcript.detected_language.as_deref())
-    {
-        return raw.to_string();
-    }
-
-    let mut pieces = tokenize(raw);
-    if config.spoken_formatting {
-        pieces = apply_spoken_formatting(pieces);
-    }
-    if config.backtrack {
-        pieces = apply_backtrack(pieces, config.profile);
-    }
-    if config.remove_fillers {
-        pieces = remove_fillers(pieces);
-    }
-
-    render_pieces(&pieces)
-}
-
 pub fn correction_aware_text(transcript: &Transcript) -> String {
     let raw = transcript.raw_text.trim();
     if raw.is_empty() || !supports_cleanup_language(transcript.detected_language.as_deref()) {
@@ -85,7 +34,7 @@ pub fn correction_aware_text(transcript: &Transcript) -> String {
 
     let mut pieces = tokenize(raw);
     pieces = apply_spoken_formatting(pieces);
-    pieces = apply_backtrack(pieces, CleanupProfile::Basic);
+    pieces = apply_backtrack(pieces);
 
     render_pieces(&pieces)
 }
@@ -214,7 +163,7 @@ fn apply_spoken_formatting(pieces: Vec<Piece>) -> Vec<Piece> {
     out
 }
 
-fn apply_backtrack(pieces: Vec<Piece>, profile: CleanupProfile) -> Vec<Piece> {
+fn apply_backtrack(pieces: Vec<Piece>) -> Vec<Piece> {
     let mut out = Vec::with_capacity(pieces.len());
     let mut i = 0;
 
@@ -234,12 +183,12 @@ fn apply_backtrack(pieces: Vec<Piece>, profile: CleanupProfile) -> Vec<Piece> {
         }
 
         match trigger.kind {
-            CorrectionKind::Phrase => trim_recent_phrase(&mut out, profile, replacement_words),
+            CorrectionKind::Phrase => trim_recent_phrase(&mut out, replacement_words),
             CorrectionKind::Sentence => {
                 if ends_with_sentence_boundary(&out) {
                     trim_last_sentence(&mut out);
                 } else {
-                    trim_recent_phrase(&mut out, profile, replacement_words);
+                    trim_recent_phrase(&mut out, replacement_words);
                 }
             }
         }
@@ -369,13 +318,10 @@ fn count_upcoming_words(pieces: &[Piece], start: usize) -> usize {
     count
 }
 
-fn trim_recent_phrase(out: &mut Vec<Piece>, profile: CleanupProfile, replacement_words: usize) {
+fn trim_recent_phrase(out: &mut Vec<Piece>, replacement_words: usize) {
     trim_soft_suffix(out);
 
-    let max_words = match profile {
-        CleanupProfile::Basic => replacement_words.clamp(1, 3),
-        CleanupProfile::Aggressive => replacement_words.clamp(2, 6),
-    };
+    let max_words = replacement_words.clamp(1, 3);
 
     let mut removed_words = 0usize;
     while removed_words < max_words {
@@ -387,19 +333,6 @@ fn trim_recent_phrase(out: &mut Vec<Piece>, profile: CleanupProfile, replacement
                 break;
             }
             None => break,
-        }
-    }
-
-    if profile == CleanupProfile::Aggressive {
-        while let Some(piece) = out.pop() {
-            match piece {
-                Piece::Word(_) => continue,
-                Piece::Punctuation(ch) if !is_strong_boundary(ch) => continue,
-                other => {
-                    out.push(other);
-                    break;
-                }
-            }
         }
     }
 
@@ -481,24 +414,6 @@ fn ends_with_sentence_boundary(out: &[Piece]) -> bool {
         Piece::Break(_) => Some(true),
         Piece::Word(_) => None,
     }) == Some(true)
-}
-
-fn remove_fillers(pieces: Vec<Piece>) -> Vec<Piece> {
-    let mut out = Vec::with_capacity(pieces.len());
-    for piece in pieces {
-        match piece {
-            Piece::Word(word) if is_filler(&word) => continue,
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-fn is_filler(word: &str) -> bool {
-    matches!(
-        normalized_word_str(word).as_str(),
-        "um" | "umm" | "uh" | "uhh" | "er" | "erm" | "ah"
-    )
 }
 
 fn render_pieces(pieces: &[Piece]) -> String {
@@ -626,44 +541,28 @@ mod tests {
     }
 
     #[test]
-    fn removes_common_fillers() {
-        let cleaned = clean_transcript(
-            &transcript("um i think we should go"),
-            &CleanupConfig::default(),
-        );
-        assert_eq!(cleaned, "I think we should go");
-    }
-
-    #[test]
     fn preserves_non_filler_words() {
-        let cleaned = clean_transcript(&transcript("i like apples"), &CleanupConfig::default());
+        let cleaned = correction_aware_text(&transcript("i like apples"));
         assert_eq!(cleaned, "I like apples");
     }
 
     #[test]
     fn converts_spoken_punctuation_commands() {
-        let cleaned = clean_transcript(
-            &transcript("hello comma world question mark"),
-            &CleanupConfig::default(),
-        );
+        let cleaned = correction_aware_text(&transcript("hello comma world question mark"));
         assert_eq!(cleaned, "Hello, world?");
     }
 
     #[test]
     fn converts_spoken_line_and_paragraph_commands() {
-        let cleaned = clean_transcript(
-            &transcript("first line new line second line new paragraph third line"),
-            &CleanupConfig::default(),
-        );
+        let cleaned = correction_aware_text(&transcript(
+            "first line new line second line new paragraph third line",
+        ));
         assert_eq!(cleaned, "First line\nSecond line\n\nThird line");
     }
 
     #[test]
     fn basic_backtrack_replaces_recent_phrase() {
-        let cleaned = clean_transcript(
-            &transcript("let's meet at 4 actually no 3"),
-            &CleanupConfig::default(),
-        );
+        let cleaned = correction_aware_text(&transcript("let's meet at 4 actually no 3"));
         assert_eq!(cleaned, "Let's meet at 3");
     }
 
@@ -687,35 +586,29 @@ mod tests {
 
     #[test]
     fn punctuated_wait_no_replaces_last_sentence() {
-        let cleaned = clean_transcript(
-            &transcript("hi there, this is a test of whisper osd. wait, no. hi there."),
-            &CleanupConfig::default(),
-        );
+        let cleaned = correction_aware_text(&transcript(
+            "hi there, this is a test of whispers osd. wait, no. hi there.",
+        ));
         assert_eq!(cleaned, "Hi there.");
     }
 
     #[test]
     fn punctuated_wait_no_still_replaces_inline_phrase() {
-        let cleaned = clean_transcript(
-            &transcript("let's meet at 4 wait, no, 3"),
-            &CleanupConfig::default(),
-        );
+        let cleaned = correction_aware_text(&transcript("let's meet at 4 wait, no, 3"));
         assert_eq!(cleaned, "Let's meet at 3");
     }
 
     #[test]
     fn scratch_that_replaces_recent_word() {
-        let cleaned = clean_transcript(
-            &transcript("i'll bring cookies scratch that brownies"),
-            &CleanupConfig::default(),
-        );
+        let cleaned =
+            correction_aware_text(&transcript("i'll bring cookies scratch that brownies"));
         assert_eq!(cleaned, "I'll bring brownies");
     }
 
     #[test]
     fn correction_aware_text_drops_previous_sentence_for_scratch_that() {
         let cleaned = correction_aware_text(&transcript(
-            "hello there, this is a test of whisper rs. scratch that. hi.",
+            "hello there, this is a test of whispers. scratch that. hi.",
         ));
         assert_eq!(cleaned, "Hi.");
     }
@@ -727,24 +620,13 @@ mod tests {
     }
 
     #[test]
-    fn aggressive_profile_trims_more_context() {
-        let config = CleanupConfig {
-            profile: CleanupProfile::Aggressive,
-            ..CleanupConfig::default()
-        };
-        let cleaned =
-            clean_transcript(&transcript("alpha beta gamma delta wait no omega"), &config);
-        assert_eq!(cleaned, "Omega");
-    }
-
-    #[test]
-    fn skips_advanced_cleanup_for_non_english_transcripts() {
+    fn skips_cleanup_for_non_english_transcripts() {
         let transcript = Transcript {
             raw_text: "um hola comma mundo".to_string(),
             detected_language: Some("es".to_string()),
             segments: Vec::new(),
         };
-        let cleaned = clean_transcript(&transcript, &CleanupConfig::default());
+        let cleaned = correction_aware_text(&transcript);
         assert_eq!(cleaned, "um hola comma mundo");
     }
 }
