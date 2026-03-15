@@ -29,7 +29,7 @@ fn build_context_matcher(
 
 async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: bool) -> Result<()> {
     let config = Config::load(cli.config.as_deref())?;
-    asr::validate_transcription_config(&config)?;
+    asr::validation::validate_transcription_config(&config)?;
     tracing::info!("decoding audio file: {}", file.display());
     let mut samples = file_audio::decode_audio_file(file)?;
     audio::preprocess_audio(&mut samples, file_audio::TARGET_SAMPLE_RATE);
@@ -79,7 +79,7 @@ async fn run_default(cli: &Cli) -> Result<()> {
 
     // Load config
     let config = Config::load(cli.config.as_deref())?;
-    asr::validate_transcription_config(&config)?;
+    asr::validation::validate_transcription_config(&config)?;
     tracing::debug!("config loaded: {config:?}");
 
     app::run(config).await

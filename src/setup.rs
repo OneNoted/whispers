@@ -240,7 +240,7 @@ fn maybe_prewarm_experimental_nemo(
 
 fn cleanup_stale_asr_workers(ui: &SetupUi, config_path: &Path) -> Result<()> {
     match config::Config::load(Some(config_path))
-        .and_then(|config| crate::asr::cleanup_stale_transcribers(&config))
+        .and_then(|config| crate::asr::cleanup::cleanup_stale_transcribers(&config))
     {
         Ok(()) => Ok(()),
         Err(err) => {
