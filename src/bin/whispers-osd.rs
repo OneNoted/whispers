@@ -1,6 +1,3 @@
-#[path = "../branding.rs"]
-mod branding;
-
 use std::ffi::CString;
 use std::os::fd::AsRawFd;
 use std::os::unix::io::{AsFd, FromRawFd};
@@ -15,6 +12,7 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+use whispers::branding;
 
 // --- Layout ---
 const NUM_BARS: usize = 28;

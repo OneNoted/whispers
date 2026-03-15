@@ -1,22 +1,13 @@
-#[path = "../branding.rs"]
-mod branding;
-#[path = "../rewrite.rs"]
-mod rewrite;
-#[path = "../rewrite_profile.rs"]
-mod rewrite_profile;
-#[path = "../rewrite_protocol.rs"]
-mod rewrite_protocol;
-
 use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-
-use crate::rewrite::LocalRewriter;
-use crate::rewrite_profile::ResolvedRewriteProfile;
-use crate::rewrite_protocol::{WorkerRequest, WorkerResponse};
+use whispers::branding;
+use whispers::rewrite::LocalRewriter;
+use whispers::rewrite_profile::ResolvedRewriteProfile;
+use whispers::rewrite_protocol::{WorkerRequest, WorkerResponse};
 
 #[derive(Parser, Debug)]
 #[command(name = branding::REWRITE_WORKER_BINARY)]

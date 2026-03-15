@@ -1,47 +1,18 @@
-mod agentic_rewrite;
-mod app;
-mod asr;
-mod asr_model;
-mod asr_protocol;
-mod audio;
-mod cleanup;
-mod cli;
-mod cloud;
-mod completions;
-mod config;
-mod context;
-mod error;
-mod faster_whisper;
-mod feedback;
-mod file_audio;
-mod inject;
-mod model;
-mod nemo_asr;
-mod personalization;
-mod postprocess;
-mod rewrite;
-mod rewrite_model;
-mod rewrite_profile;
-mod rewrite_protocol;
-mod rewrite_worker;
-mod session;
-mod setup;
-#[cfg(test)]
-mod test_support;
-mod transcribe;
-mod ui;
-
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
-
-use crate::cli::{
+use whispers::cli::{
     AppRuleAction, AsrModelAction, Cli, CloudAction, Command, DictionaryAction, GlossaryAction,
     ModelAction, RewriteModelAction, SnippetAction,
 };
-use crate::config::Config;
-use crate::rewrite_protocol::RewriteSurfaceKind;
+use whispers::config::Config;
+use whispers::error::{Result, WhsprError};
+use whispers::rewrite_protocol::RewriteSurfaceKind;
+use whispers::{
+    agentic_rewrite, app, asr, asr_model, audio, cloud, completions, file_audio, model,
+    personalization, postprocess, rewrite_model, setup, ui,
+};
 
 struct PidLock {
     path: PathBuf,
@@ -120,7 +91,7 @@ fn try_acquire_pid_lock(path: &Path) -> std::io::Result<PidLock> {
     })
 }
 
-fn signal_existing_instance(path: &Path) -> crate::error::Result<bool> {
+fn signal_existing_instance(path: &Path) -> Result<bool> {
     let Some(pid) = read_pid_from_lock(path) else {
         tracing::warn!("stale pid lock at {}, removing", path.display());
         let _ = std::fs::remove_file(path);
@@ -152,7 +123,7 @@ fn signal_existing_instance(path: &Path) -> crate::error::Result<bool> {
     Err(err.into())
 }
 
-fn acquire_or_signal_lock() -> crate::error::Result<Option<PidLock>> {
+fn acquire_or_signal_lock() -> Result<Option<PidLock>> {
     let path = pid_file_path();
 
     for _ in 0..2 {
@@ -167,15 +138,15 @@ fn acquire_or_signal_lock() -> crate::error::Result<Option<PidLock>> {
         }
     }
 
-    Err(crate::error::WhsprError::Config(format!(
+    Err(WhsprError::Config(format!(
         "failed to acquire pid lock at {}",
         path.display()
     )))
 }
 
 fn init_tracing(verbose: u8) {
-    crate::ui::configure_terminal_colors();
-    crate::ui::set_verbosity(verbose);
+    ui::configure_terminal_colors();
+    ui::set_verbosity(verbose);
     let filter = match verbose {
         0 => "whispers=warn",
         1 => "whispers=info",
@@ -247,7 +218,7 @@ async fn transcribe_file(
     Ok(())
 }
 
-async fn run_default(cli: &Cli) -> crate::error::Result<()> {
+async fn run_default(cli: &Cli) -> Result<()> {
     let Some(_pid_lock) = acquire_or_signal_lock()? else {
         return Ok(());
     };
@@ -263,7 +234,7 @@ async fn run_default(cli: &Cli) -> crate::error::Result<()> {
 }
 
 #[tokio::main]
-async fn main() -> crate::error::Result<()> {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     init_tracing(cli.verbose);
