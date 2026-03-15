@@ -100,6 +100,9 @@ Goal: make the dictation path read as orchestration over smaller components inst
 ### Checkpoint 2.4
 
 - Commit: `refactor: split rewrite routing from prompt rendering`
+- Status:
+  - completed sub-checkpoints: routing split, prompt rendering split, local rewrite engine extraction
+  - remaining sub-checkpoint: output cleanup plus thin facade
 - Deliverables:
   - Separate route selection from prompt/template rendering in `src/rewrite.rs`.
   - Keep giant prompt contracts out of routing logic.
@@ -255,11 +258,11 @@ Use this each time work starts on a new item:
 
 ## Progress Log
 
-- [ ] Phase 1.1 complete
-- [ ] Phase 1.2 complete
-- [ ] Phase 2.1 complete
-- [ ] Phase 2.2 complete
-- [ ] Phase 2.3 complete
+- [x] Phase 1.1 complete
+- [x] Phase 1.2 complete
+- [x] Phase 2.1 complete
+- [x] Phase 2.2 complete
+- [x] Phase 2.3 complete
 - [ ] Phase 2.4 complete
 - [ ] Phase 2.5 complete
 - [ ] Phase 3.1 complete
