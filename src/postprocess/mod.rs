@@ -1,18 +1,17 @@
-use std::path::{Path, PathBuf};
+mod planning;
+
+use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
 use crate::agentic_rewrite;
-use crate::cleanup;
 use crate::cloud;
 use crate::config::{Config, PostprocessMode, RewriteBackend, RewriteFallback};
 use crate::context::TypingContext;
 use crate::personalization::{self, PersonalizationRules};
-use crate::rewrite_model;
-use crate::rewrite_protocol::RewriteSessionBacktrackCandidateKind;
 use crate::rewrite_protocol::{RewriteCorrectionPolicy, RewriteTranscript};
 use crate::rewrite_worker::{self, RewriteService};
-use crate::session::{self, EligibleSessionEntry, SessionRewriteSummary};
+use crate::session::{EligibleSessionEntry, SessionRewriteSummary};
 use crate::transcribe::Transcript;
 
 const FEEDBACK_DRAIN_DELAY: Duration = Duration::from_millis(150);
@@ -33,27 +32,7 @@ pub struct FinalizedTranscript {
     pub rewrite_summary: SessionRewriteSummary,
 }
 
-pub fn raw_text(transcript: &Transcript) -> String {
-    transcript.raw_text.trim().to_string()
-}
-
-fn base_text(config: &Config, transcript: &Transcript) -> String {
-    match config.postprocess.mode {
-        PostprocessMode::LegacyBasic => cleanup::clean_transcript(transcript, &config.cleanup),
-        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
-            cleanup::correction_aware_text(transcript)
-        }
-        PostprocessMode::Raw => raw_text(transcript),
-    }
-}
-
-pub fn resolve_rewrite_model_path(config: &Config) -> Option<PathBuf> {
-    if let Some(path) = config.resolved_rewrite_model_path() {
-        return Some(path);
-    }
-
-    rewrite_model::selected_model_path(&config.rewrite.selected_model)
-}
+pub use planning::raw_text;
 
 pub async fn finalize_transcript(
     config: &Config,
@@ -63,34 +42,36 @@ pub async fn finalize_transcript(
     recent_session: Option<&EligibleSessionEntry>,
 ) -> FinalizedTranscript {
     let started = Instant::now();
-    let rules = load_runtime_rules(config);
     let finalized = match config.postprocess.mode {
-        PostprocessMode::Raw => finalize_plain_text(
-            raw_text(&transcript),
-            SessionRewriteSummary {
-                had_edit_cues: false,
-                rewrite_used: false,
-                recommended_candidate: None,
-            },
-            &rules,
-        ),
-        PostprocessMode::LegacyBasic => finalize_plain_text(
-            cleanup::clean_transcript(&transcript, &config.cleanup),
-            SessionRewriteSummary {
-                had_edit_cues: false,
-                rewrite_used: false,
-                recommended_candidate: None,
-            },
-            &rules,
-        ),
-        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
-            rewrite_transcript_or_fallback(
-                config,
-                &transcript,
-                rewrite_service,
+        PostprocessMode::Raw => {
+            let rules = planning::load_runtime_rules(config);
+            finalize_plain_text(
+                planning::raw_text(&transcript),
+                SessionRewriteSummary {
+                    had_edit_cues: false,
+                    rewrite_used: false,
+                    recommended_candidate: None,
+                },
                 &rules,
-                typing_context,
-                recent_session,
+            )
+        }
+        PostprocessMode::LegacyBasic => {
+            let rules = planning::load_runtime_rules(config);
+            finalize_plain_text(
+                crate::cleanup::clean_transcript(&transcript, &config.cleanup),
+                SessionRewriteSummary {
+                    had_edit_cues: false,
+                    rewrite_used: false,
+                    recommended_candidate: None,
+                },
+                &rules,
+            )
+        }
+        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
+            rewrite_plan_or_fallback(
+                config,
+                rewrite_service,
+                planning::build_rewrite_plan(config, &transcript, typing_context, recent_session),
             )
             .await
         }
@@ -124,7 +105,7 @@ pub fn prepare_rewrite_service(config: &Config) -> Option<RewriteService> {
         return None;
     }
 
-    let model_path = resolve_rewrite_model_path(config)?;
+    let model_path = planning::resolve_rewrite_model_path(config)?;
     Some(rewrite_worker::RewriteService::new(
         &config.rewrite,
         &model_path,
@@ -138,32 +119,40 @@ pub fn prewarm_rewrite_service(service: &RewriteService, phase: &str) {
     }
 }
 
-async fn rewrite_transcript_or_fallback(
+async fn rewrite_plan_or_fallback(
     config: &Config,
-    transcript: &Transcript,
     rewrite_service: Option<&RewriteService>,
-    rules: &PersonalizationRules,
-    typing_context: Option<&TypingContext>,
-    recent_session: Option<&EligibleSessionEntry>,
+    plan: planning::RewritePlan,
 ) -> FinalizedTranscript {
-    let fallback = base_text(config, transcript);
+    let planning::RewritePlan {
+        rules,
+        fallback_text,
+        rewrite_transcript,
+        custom_instructions,
+        local_model_path,
+        operation,
+        had_edit_cues,
+        recommended_candidate,
+        deterministic_replacement_text,
+    } = plan;
     let local_rewrite_available = crate::rewrite::local_rewrite_available();
     let local_backend_requested = config.rewrite.backend == RewriteBackend::Local;
-    let local_model_path = resolve_rewrite_model_path(config);
+
     if local_backend_requested && !local_rewrite_available {
         tracing::warn!(
             "local rewrite backend requested, but this build does not include local rewrite support; using fallback"
         );
         return finalize_plain_text(
-            fallback,
+            fallback_text,
             SessionRewriteSummary {
                 had_edit_cues: false,
                 rewrite_used: false,
                 recommended_candidate: None,
             },
-            rules,
+            &rules,
         );
     }
+
     let local_rewrite_required = local_backend_requested
         || (config.rewrite.fallback == RewriteFallback::Local && local_rewrite_available);
     if local_rewrite_required && local_model_path.is_none() {
@@ -171,77 +160,30 @@ async fn rewrite_transcript_or_fallback(
             "rewrite backend requires a local model but none is configured; using fallback"
         );
         return finalize_plain_text(
-            fallback,
+            fallback_text,
             SessionRewriteSummary {
                 had_edit_cues: false,
                 rewrite_used: false,
                 recommended_candidate: None,
             },
-            rules,
+            &rules,
         );
     }
-    let mut rewrite_transcript = personalization::build_rewrite_transcript(transcript, rules);
-    rewrite_transcript.typing_context = typing_context.and_then(session::to_rewrite_typing_context);
-    if config.postprocess.mode == PostprocessMode::AgenticRewrite {
-        agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
-    }
-    let session_plan = session::build_backtrack_plan(&rewrite_transcript, recent_session);
-    rewrite_transcript.recent_session_entries = session_plan.recent_entries.clone();
-    rewrite_transcript.session_backtrack_candidates = session_plan.candidates.clone();
-    rewrite_transcript.recommended_session_candidate = session_plan.recommended.clone();
-    tracing::debug!(
-        mode = config.postprocess.mode.as_str(),
-        edit_hypotheses = rewrite_transcript.edit_hypotheses.len(),
-        rewrite_candidates = rewrite_transcript.rewrite_candidates.len(),
-        session_backtrack_candidates = rewrite_transcript.session_backtrack_candidates.len(),
-        recommended_candidate = rewrite_transcript
-            .recommended_candidate
-            .as_ref()
-            .map(|candidate| candidate.text.as_str())
-            .unwrap_or(""),
-        "prepared rewrite request"
-    );
-    let custom_instructions = personalization::custom_instructions(rules);
-    let deterministic_session_replacement = session_plan.deterministic_replacement_text.clone();
 
-    if let Some(text) = deterministic_session_replacement {
+    if let Some(text) = deterministic_replacement_text {
         tracing::debug!(
             output_len = text.len(),
             mode = config.postprocess.mode.as_str(),
             "using deterministic session replacement"
         );
-        let operation = rewrite_transcript
-            .recommended_session_candidate
-            .as_ref()
-            .and_then(|candidate| {
-                matches!(
-                    candidate.kind,
-                    RewriteSessionBacktrackCandidateKind::ReplaceLastEntry
-                )
-                .then_some(FinalizedOperation::ReplaceLastEntry {
-                    entry_id: candidate.entry_id?,
-                    delete_graphemes: candidate.delete_graphemes,
-                })
-            })
-            .unwrap_or(FinalizedOperation::Append);
         return finalize_plain_text(
             text,
             SessionRewriteSummary {
-                had_edit_cues: !rewrite_transcript.edit_signals.is_empty()
-                    || !rewrite_transcript.edit_hypotheses.is_empty(),
+                had_edit_cues,
                 rewrite_used: false,
-                recommended_candidate: rewrite_transcript
-                    .recommended_session_candidate
-                    .as_ref()
-                    .map(|candidate| candidate.text.clone())
-                    .or_else(|| {
-                        rewrite_transcript
-                            .recommended_candidate
-                            .as_ref()
-                            .map(|candidate| candidate.text.clone())
-                    }),
+                recommended_candidate,
             },
-            rules,
+            &rules,
         )
         .with_operation(operation);
     }
@@ -255,7 +197,7 @@ async fn rewrite_transcript_or_fallback(
                     .as_ref()
                     .expect("local rewrite requires resolved model path"),
                 &rewrite_transcript,
-                custom_instructions,
+                custom_instructions.as_deref(),
             )
             .await
         }
@@ -264,7 +206,11 @@ async fn rewrite_transcript_or_fallback(
             let cloud_result = match cloud_service {
                 Ok(service) => {
                     service
-                        .rewrite_transcript(config, &rewrite_transcript, custom_instructions)
+                        .rewrite_transcript(
+                            config,
+                            &rewrite_transcript,
+                            custom_instructions.as_deref(),
+                        )
                         .await
                 }
                 Err(err) => Err(err),
@@ -283,7 +229,7 @@ async fn rewrite_transcript_or_fallback(
                             .as_ref()
                             .expect("local rewrite fallback requires resolved model path"),
                         &rewrite_transcript,
-                        custom_instructions,
+                        custom_instructions.as_deref(),
                     )
                     .await
                 }
@@ -291,19 +237,6 @@ async fn rewrite_transcript_or_fallback(
             }
         }
     };
-
-    let had_edit_cues = !rewrite_transcript.edit_signals.is_empty()
-        || !rewrite_transcript.edit_hypotheses.is_empty();
-    let recommended_candidate = rewrite_transcript
-        .recommended_session_candidate
-        .as_ref()
-        .map(|candidate| candidate.text.clone())
-        .or_else(|| {
-            rewrite_transcript
-                .recommended_candidate
-                .as_ref()
-                .map(|candidate| candidate.text.clone())
-        });
 
     let (base, rewrite_used) = match rewrite_result {
         Ok(text) if rewrite_output_accepted(config, &rewrite_transcript, &text) => {
@@ -316,7 +249,7 @@ async fn rewrite_transcript_or_fallback(
         }
         Ok(text) if text.trim().is_empty() => {
             tracing::warn!("rewrite model returned empty text; using fallback");
-            (fallback, false)
+            (fallback_text, false)
         }
         Ok(text) => {
             tracing::warn!(
@@ -324,27 +257,13 @@ async fn rewrite_transcript_or_fallback(
                 output_len = text.len(),
                 "rewrite output failed acceptance guard; using fallback"
             );
-            (fallback, false)
+            (fallback_text, false)
         }
         Err(err) => {
             tracing::warn!("rewrite failed: {err}; using fallback");
-            (fallback, false)
+            (fallback_text, false)
         }
     };
-    let operation = rewrite_transcript
-        .recommended_session_candidate
-        .as_ref()
-        .and_then(|candidate| {
-            matches!(
-                candidate.kind,
-                RewriteSessionBacktrackCandidateKind::ReplaceLastEntry
-            )
-            .then_some(FinalizedOperation::ReplaceLastEntry {
-                entry_id: candidate.entry_id?,
-                delete_graphemes: candidate.delete_graphemes,
-            })
-        })
-        .unwrap_or(FinalizedOperation::Append);
 
     finalize_plain_text(
         base,
@@ -353,7 +272,7 @@ async fn rewrite_transcript_or_fallback(
             rewrite_used,
             recommended_candidate,
         },
-        rules,
+        &rules,
     )
     .with_operation(operation)
 }
@@ -400,16 +319,6 @@ fn finalize_plain_text(
         text: personalization::finalize_text(&text, rules),
         operation: FinalizedOperation::Append,
         rewrite_summary,
-    }
-}
-
-fn load_runtime_rules(config: &Config) -> PersonalizationRules {
-    match personalization::load_rules(config) {
-        Ok(rules) => rules,
-        Err(err) => {
-            tracing::warn!("failed to load personalization rules: {err}");
-            PersonalizationRules::default()
-        }
     }
 }
 
