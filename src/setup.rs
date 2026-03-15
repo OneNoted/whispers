@@ -253,8 +253,8 @@ fn cleanup_stale_asr_workers(ui: &SetupUi, config_path: &Path) -> Result<()> {
 }
 
 fn asr_model_prewarm(config: &config::Config) -> Result<()> {
-    let prepared = crate::asr::prepare_transcriber(config)?;
-    crate::asr::prewarm_transcriber(&prepared, "setup");
+    let prepared = crate::asr::prepare::prepare_transcriber(config)?;
+    crate::asr::prepare::prewarm_transcriber(&prepared, "setup");
     Ok(())
 }
 

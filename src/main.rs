@@ -41,8 +41,8 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
     if let Some(service) = rewrite_service.as_ref() {
         postprocess::execution::prewarm_rewrite_service(service, "file transcription");
     }
-    let prepared = asr::prepare_transcriber(&config)?;
-    asr::prewarm_transcriber(&prepared, "file transcription");
+    let prepared = asr::prepare::prepare_transcriber(&config)?;
+    asr::prepare::prewarm_transcriber(&prepared, "file transcription");
     let transcript =
         asr::transcribe_audio(&config, prepared, samples, file_audio::TARGET_SAMPLE_RATE).await?;
 

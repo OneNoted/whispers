@@ -42,9 +42,9 @@ pub async fn run(config: Config) -> Result<()> {
     let mut osd = spawn_osd();
     tracing::info!("recording... (run whispers again to stop)");
 
-    let transcriber = asr::prepare_transcriber(&config)?;
+    let transcriber = asr::prepare::prepare_transcriber(&config)?;
     let rewrite_service = execution::prepare_rewrite_service(&config);
-    asr::prewarm_transcriber(&transcriber, "recording");
+    asr::prepare::prewarm_transcriber(&transcriber, "recording");
     if let Some(service) = rewrite_service.as_ref() {
         execution::prewarm_rewrite_service(service, "recording");
     }

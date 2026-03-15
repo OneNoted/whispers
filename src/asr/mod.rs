@@ -1,66 +1,12 @@
 pub mod cleanup;
+pub mod prepare;
 pub mod validation;
 
-use crate::cloud::CloudService;
 use crate::config::{Config, TranscriptionBackend, TranscriptionConfig, TranscriptionFallback};
 use crate::error::{Result, WhsprError};
-use crate::faster_whisper::{self, FasterWhisperService};
 use crate::model;
-use crate::nemo_asr::{self, NemoAsrService};
 use crate::transcribe::{Transcript, TranscriptionBackend as _, WhisperLocal};
-
-pub enum PreparedTranscriber {
-    Whisper(tokio::task::JoinHandle<Result<WhisperLocal>>),
-    Faster(FasterWhisperService),
-    Nemo(NemoAsrService),
-    Cloud(CloudService),
-}
-
-pub fn prepare_transcriber(config: &Config) -> Result<PreparedTranscriber> {
-    cleanup::cleanup_stale_transcribers(config)?;
-
-    match config.transcription.backend {
-        TranscriptionBackend::WhisperCpp => {
-            let whisper_config = config.transcription.clone();
-            let model_path = config.resolved_model_path();
-            Ok(PreparedTranscriber::Whisper(tokio::task::spawn_blocking(
-                move || WhisperLocal::new(&whisper_config, &model_path),
-            )))
-        }
-        TranscriptionBackend::FasterWhisper => {
-            faster_whisper::prepare_service(&config.transcription)
-                .map(PreparedTranscriber::Faster)
-                .ok_or_else(|| {
-                    WhsprError::Transcription(
-                        "faster-whisper backend selected but no model path could be resolved"
-                            .into(),
-                    )
-                })
-        }
-        TranscriptionBackend::Nemo => nemo_asr::prepare_service(&config.transcription)
-            .map(PreparedTranscriber::Nemo)
-            .ok_or_else(|| {
-                WhsprError::Transcription(
-                    "nemo backend selected but no model reference could be resolved".into(),
-                )
-            }),
-        TranscriptionBackend::Cloud => Ok(PreparedTranscriber::Cloud(CloudService::new(config)?)),
-    }
-}
-
-pub fn prewarm_transcriber(prepared: &PreparedTranscriber, phase: &str) {
-    match prepared {
-        PreparedTranscriber::Faster(service) => match service.prewarm() {
-            Ok(()) => tracing::info!("prewarming faster-whisper worker via {}", phase),
-            Err(err) => tracing::warn!("failed to prewarm faster-whisper worker: {err}"),
-        },
-        PreparedTranscriber::Nemo(service) => match service.prewarm() {
-            Ok(()) => tracing::info!("prewarming NeMo ASR worker via {}", phase),
-            Err(err) => tracing::warn!("failed to prewarm NeMo ASR worker: {err}"),
-        },
-        _ => {}
-    }
-}
+use prepare::{PreparedTranscriber, prepare_local_transcriber};
 
 pub async fn transcribe_audio(
     config: &Config,
@@ -125,31 +71,7 @@ async fn fallback_local_transcribe(
         local_config.backend.as_str(),
         model_path.display()
     );
-    let prepared = match local_config.backend {
-        TranscriptionBackend::WhisperCpp => {
-            let whisper_config = local_config.clone();
-            Ok(PreparedTranscriber::Whisper(tokio::task::spawn_blocking(
-                move || WhisperLocal::new(&whisper_config, &model_path),
-            )))
-        }
-        TranscriptionBackend::FasterWhisper => faster_whisper::prepare_service(&local_config)
-            .map(PreparedTranscriber::Faster)
-            .ok_or_else(|| {
-                WhsprError::Transcription(
-                    "faster-whisper fallback selected but no model path could be resolved".into(),
-                )
-            }),
-        TranscriptionBackend::Nemo => nemo_asr::prepare_service(&local_config)
-            .map(PreparedTranscriber::Nemo)
-            .ok_or_else(|| {
-                WhsprError::Transcription(
-                    "nemo fallback selected but no model reference could be resolved".into(),
-                )
-            }),
-        TranscriptionBackend::Cloud => Err(WhsprError::Transcription(
-            "cloud backend cannot be prepared as a local transcriber".into(),
-        )),
-    }?;
+    let prepared = prepare_local_transcriber(&local_config, &model_path)?;
     match prepared {
         PreparedTranscriber::Whisper(handle) => {
             let backend = handle.await.map_err(|e| {
