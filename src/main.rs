@@ -36,10 +36,10 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
     let rewrite_service = if raw {
         None
     } else {
-        postprocess::prepare_rewrite_service(&config)
+        postprocess::execution::prepare_rewrite_service(&config)
     };
     if let Some(service) = rewrite_service.as_ref() {
-        postprocess::prewarm_rewrite_service(service, "file transcription");
+        postprocess::execution::prewarm_rewrite_service(service, "file transcription");
     }
     let prepared = asr::prepare_transcriber(&config)?;
     asr::prewarm_transcriber(&prepared, "file transcription");
@@ -47,11 +47,17 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
         asr::transcribe_audio(&config, prepared, samples, file_audio::TARGET_SAMPLE_RATE).await?;
 
     let text = if raw {
-        postprocess::raw_text(&transcript)
+        postprocess::planning::raw_text(&transcript)
     } else {
-        postprocess::finalize_transcript(&config, transcript, rewrite_service.as_ref(), None, None)
-            .await
-            .text
+        postprocess::finalize::finalize_transcript(
+            &config,
+            transcript,
+            rewrite_service.as_ref(),
+            None,
+            None,
+        )
+        .await
+        .text
     };
 
     if let Some(out_path) = output {

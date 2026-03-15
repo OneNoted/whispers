@@ -10,7 +10,7 @@ use crate::rewrite_protocol::{RewriteSessionBacktrackCandidateKind, RewriteTrans
 use crate::session::{self, EligibleSessionEntry};
 use crate::transcribe::Transcript;
 
-use super::FinalizedOperation;
+use super::finalize::FinalizedOperation;
 
 pub(crate) struct RewritePlan {
     pub rules: PersonalizationRules,

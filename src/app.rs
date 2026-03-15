@@ -11,7 +11,7 @@ use crate::context;
 use crate::error::Result;
 use crate::feedback::FeedbackPlayer;
 use crate::inject::TextInjector;
-use crate::postprocess;
+use crate::postprocess::{execution, finalize};
 use crate::session;
 
 pub async fn run(config: Config) -> Result<()> {
@@ -43,10 +43,10 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!("recording... (run whispers again to stop)");
 
     let transcriber = asr::prepare_transcriber(&config)?;
-    let rewrite_service = postprocess::prepare_rewrite_service(&config);
+    let rewrite_service = execution::prepare_rewrite_service(&config);
     asr::prewarm_transcriber(&transcriber, "recording");
     if let Some(service) = rewrite_service.as_ref() {
-        postprocess::prewarm_rewrite_service(service, "recording");
+        execution::prewarm_rewrite_service(service, "recording");
     }
 
     tokio::select! {
@@ -92,7 +92,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     if transcript.is_empty() {
         tracing::warn!("transcription returned empty text");
-        postprocess::wait_for_feedback_drain().await;
+        finalize::wait_for_feedback_drain().await;
         return Ok(());
     }
 
@@ -109,7 +109,7 @@ pub async fn run(config: Config) -> Result<()> {
         same_focus
     });
     let finalize_started = Instant::now();
-    let finalized = postprocess::finalize_transcript(
+    let finalized = finalize::finalize_transcript(
         &config,
         transcript,
         rewrite_service.as_ref(),
@@ -121,8 +121,8 @@ pub async fn run(config: Config) -> Result<()> {
         elapsed_ms = finalize_started.elapsed().as_millis(),
         output_chars = finalized.text.len(),
         operation = match finalized.operation {
-            postprocess::FinalizedOperation::Append => "append",
-            postprocess::FinalizedOperation::ReplaceLastEntry { .. } => "replace_last_entry",
+            finalize::FinalizedOperation::Append => "append",
+            finalize::FinalizedOperation::ReplaceLastEntry { .. } => "replace_last_entry",
         },
         rewrite_used = finalized.rewrite_summary.rewrite_used,
         "post-processing stage finished"
@@ -135,7 +135,7 @@ pub async fn run(config: Config) -> Result<()> {
         // draining the stop sound's last buffer; exiting while it's "warm"
         // causes an audible click as the OS closes our audio file descriptors.
         // With speech, transcription takes seconds — providing natural drain time.
-        postprocess::wait_for_feedback_drain().await;
+        finalize::wait_for_feedback_drain().await;
         return Ok(());
     }
 
@@ -143,7 +143,7 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!("injecting text: {:?}", finalized.text);
     let injector = TextInjector::new();
     match finalized.operation {
-        postprocess::FinalizedOperation::Append => {
+        finalize::FinalizedOperation::Append => {
             injector.inject(&finalized.text).await?;
             if session_enabled {
                 session::record_append(
@@ -154,7 +154,7 @@ pub async fn run(config: Config) -> Result<()> {
                 )?;
             }
         }
-        postprocess::FinalizedOperation::ReplaceLastEntry {
+        finalize::FinalizedOperation::ReplaceLastEntry {
             entry_id,
             delete_graphemes,
         } => {
