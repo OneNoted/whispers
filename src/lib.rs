@@ -25,6 +25,7 @@ pub mod rewrite_model;
 pub mod rewrite_profile;
 pub mod rewrite_protocol;
 pub mod rewrite_worker;
+pub mod runtime_support;
 pub mod session;
 pub mod setup;
 #[cfg(test)]
