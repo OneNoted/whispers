@@ -83,7 +83,8 @@ pub async fn run(config: Config) -> Result<()> {
     );
 
     let transcribe_started = Instant::now();
-    let transcript = asr::transcribe_audio(&config, transcriber, audio, sample_rate).await?;
+    let transcript =
+        asr::execute::transcribe_audio(&config, transcriber, audio, sample_rate).await?;
     tracing::info!(
         elapsed_ms = transcribe_started.elapsed().as_millis(),
         transcript_chars = transcript.raw_text.len(),

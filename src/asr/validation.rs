@@ -34,3 +34,44 @@ pub fn validate_transcription_config(config: &Config) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn faster_whisper_rejects_non_english_explicit_language() {
+        let mut config = Config::default();
+        config.transcription.backend = TranscriptionBackend::FasterWhisper;
+        config.transcription.local_backend = TranscriptionBackend::FasterWhisper;
+        config.transcription.language = "sv".into();
+
+        let err = validate_transcription_config(&config).expect_err("config should fail");
+        match err {
+            WhsprError::Config(message) => {
+                assert!(
+                    message.contains("faster-whisper managed models are currently English-focused")
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nemo_rejects_non_english_explicit_language() {
+        let mut config = Config::default();
+        config.transcription.backend = TranscriptionBackend::Nemo;
+        config.transcription.local_backend = TranscriptionBackend::Nemo;
+        config.transcription.language = "sv".into();
+
+        let err = validate_transcription_config(&config).expect_err("config should fail");
+        match err {
+            WhsprError::Config(message) => {
+                assert!(
+                    message.contains("NeMo experimental ASR models are currently English-only")
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}

@@ -44,7 +44,8 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
     let prepared = asr::prepare::prepare_transcriber(&config)?;
     asr::prepare::prewarm_transcriber(&prepared, "file transcription");
     let transcript =
-        asr::transcribe_audio(&config, prepared, samples, file_audio::TARGET_SAMPLE_RATE).await?;
+        asr::execute::transcribe_audio(&config, prepared, samples, file_audio::TARGET_SAMPLE_RATE)
+            .await?;
 
     let text = if raw {
         postprocess::planning::raw_text(&transcript)

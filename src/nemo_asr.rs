@@ -178,7 +178,7 @@ pub fn prepare_service(config: &TranscriptionConfig) -> Option<NemoAsrService> {
     Some(NemoAsrService::new(config, &resolved))
 }
 
-pub fn resolve_model_ref(config: &TranscriptionConfig) -> Option<ResolvedModelRef> {
+fn resolve_model_ref(config: &TranscriptionConfig) -> Option<ResolvedModelRef> {
     if let Some(model) = find_managed_model(&config.selected_model) {
         let model_dir = managed_model_local_path(model.name);
         if let Some(metadata) = load_model_ready_metadata(&model_dir) {
