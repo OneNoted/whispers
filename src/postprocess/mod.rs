@@ -1,16 +1,15 @@
+mod execution;
 mod planning;
 
-use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
 use crate::agentic_rewrite;
-use crate::cloud;
 use crate::config::{Config, PostprocessMode, RewriteBackend, RewriteFallback};
 use crate::context::TypingContext;
 use crate::personalization::{self, PersonalizationRules};
 use crate::rewrite_protocol::{RewriteCorrectionPolicy, RewriteTranscript};
-use crate::rewrite_worker::{self, RewriteService};
+use crate::rewrite_worker::RewriteService;
 use crate::session::{EligibleSessionEntry, SessionRewriteSummary};
 use crate::transcribe::Transcript;
 
@@ -32,6 +31,7 @@ pub struct FinalizedTranscript {
     pub rewrite_summary: SessionRewriteSummary,
 }
 
+pub use execution::{prepare_rewrite_service, prewarm_rewrite_service};
 pub use planning::raw_text;
 
 pub async fn finalize_transcript(
@@ -90,51 +90,11 @@ pub async fn wait_for_feedback_drain() {
     tokio::time::sleep(FEEDBACK_DRAIN_DELAY).await;
 }
 
-pub fn prepare_rewrite_service(config: &Config) -> Option<RewriteService> {
-    if !config.postprocess.mode.uses_rewrite() {
-        return None;
-    }
-
-    if config.rewrite.backend != RewriteBackend::Local
-        && config.rewrite.fallback != RewriteFallback::Local
-    {
-        return None;
-    }
-
-    if !crate::rewrite::local_rewrite_available() {
-        return None;
-    }
-
-    let model_path = planning::resolve_rewrite_model_path(config)?;
-    Some(rewrite_worker::RewriteService::new(
-        &config.rewrite,
-        &model_path,
-    ))
-}
-
-pub fn prewarm_rewrite_service(service: &RewriteService, phase: &str) {
-    match service.prewarm() {
-        Ok(()) => tracing::info!("prewarming rewrite worker via {}", phase,),
-        Err(err) => tracing::warn!("failed to prewarm rewrite worker: {err}"),
-    }
-}
-
 async fn rewrite_plan_or_fallback(
     config: &Config,
     rewrite_service: Option<&RewriteService>,
     plan: planning::RewritePlan,
 ) -> FinalizedTranscript {
-    let planning::RewritePlan {
-        rules,
-        fallback_text,
-        rewrite_transcript,
-        custom_instructions,
-        local_model_path,
-        operation,
-        had_edit_cues,
-        recommended_candidate,
-        deterministic_replacement_text,
-    } = plan;
     let local_rewrite_available = crate::rewrite::local_rewrite_available();
     let local_backend_requested = config.rewrite.backend == RewriteBackend::Local;
 
@@ -143,34 +103,34 @@ async fn rewrite_plan_or_fallback(
             "local rewrite backend requested, but this build does not include local rewrite support; using fallback"
         );
         return finalize_plain_text(
-            fallback_text,
+            plan.fallback_text,
             SessionRewriteSummary {
                 had_edit_cues: false,
                 rewrite_used: false,
                 recommended_candidate: None,
             },
-            &rules,
+            &plan.rules,
         );
     }
 
     let local_rewrite_required = local_backend_requested
         || (config.rewrite.fallback == RewriteFallback::Local && local_rewrite_available);
-    if local_rewrite_required && local_model_path.is_none() {
+    if local_rewrite_required && plan.local_model_path.is_none() {
         tracing::warn!(
             "rewrite backend requires a local model but none is configured; using fallback"
         );
         return finalize_plain_text(
-            fallback_text,
+            plan.fallback_text,
             SessionRewriteSummary {
                 had_edit_cues: false,
                 rewrite_used: false,
                 recommended_candidate: None,
             },
-            &rules,
+            &plan.rules,
         );
     }
 
-    if let Some(text) = deterministic_replacement_text {
+    if let Some(text) = plan.deterministic_replacement_text.clone() {
         tracing::debug!(
             output_len = text.len(),
             mode = config.postprocess.mode.as_str(),
@@ -179,67 +139,19 @@ async fn rewrite_plan_or_fallback(
         return finalize_plain_text(
             text,
             SessionRewriteSummary {
-                had_edit_cues,
+                had_edit_cues: plan.had_edit_cues,
                 rewrite_used: false,
-                recommended_candidate,
+                recommended_candidate: plan.recommended_candidate.clone(),
             },
-            &rules,
+            &plan.rules,
         )
-        .with_operation(operation);
+        .with_operation(plan.operation.clone());
     }
 
-    let rewrite_result = match config.rewrite.backend {
-        RewriteBackend::Local => {
-            local_rewrite_result(
-                config,
-                rewrite_service,
-                local_model_path
-                    .as_ref()
-                    .expect("local rewrite requires resolved model path"),
-                &rewrite_transcript,
-                custom_instructions.as_deref(),
-            )
-            .await
-        }
-        RewriteBackend::Cloud => {
-            let cloud_service = cloud::CloudService::new(config);
-            let cloud_result = match cloud_service {
-                Ok(service) => {
-                    service
-                        .rewrite_transcript(
-                            config,
-                            &rewrite_transcript,
-                            custom_instructions.as_deref(),
-                        )
-                        .await
-                }
-                Err(err) => Err(err),
-            };
-            match cloud_result {
-                Ok(text) => Ok(text),
-                Err(err)
-                    if config.rewrite.fallback == RewriteFallback::Local
-                        && local_rewrite_available =>
-                {
-                    tracing::warn!("cloud rewrite failed: {err}; falling back to local rewrite");
-                    local_rewrite_result(
-                        config,
-                        rewrite_service,
-                        local_model_path
-                            .as_ref()
-                            .expect("local rewrite fallback requires resolved model path"),
-                        &rewrite_transcript,
-                        custom_instructions.as_deref(),
-                    )
-                    .await
-                }
-                Err(err) => Err(err),
-            }
-        }
-    };
+    let rewrite_result = execution::execute_rewrite(config, rewrite_service, &plan).await;
 
     let (base, rewrite_used) = match rewrite_result {
-        Ok(text) if rewrite_output_accepted(config, &rewrite_transcript, &text) => {
+        Ok(text) if rewrite_output_accepted(config, &plan.rewrite_transcript, &text) => {
             tracing::debug!(
                 output_len = text.len(),
                 mode = config.postprocess.mode.as_str(),
@@ -249,7 +161,7 @@ async fn rewrite_plan_or_fallback(
         }
         Ok(text) if text.trim().is_empty() => {
             tracing::warn!("rewrite model returned empty text; using fallback");
-            (fallback_text, false)
+            (plan.fallback_text, false)
         }
         Ok(text) => {
             tracing::warn!(
@@ -257,57 +169,24 @@ async fn rewrite_plan_or_fallback(
                 output_len = text.len(),
                 "rewrite output failed acceptance guard; using fallback"
             );
-            (fallback_text, false)
+            (plan.fallback_text, false)
         }
         Err(err) => {
             tracing::warn!("rewrite failed: {err}; using fallback");
-            (fallback_text, false)
+            (plan.fallback_text, false)
         }
     };
 
     finalize_plain_text(
         base,
         SessionRewriteSummary {
-            had_edit_cues,
+            had_edit_cues: plan.had_edit_cues,
             rewrite_used,
-            recommended_candidate,
+            recommended_candidate: plan.recommended_candidate,
         },
-        &rules,
+        &plan.rules,
     )
-    .with_operation(operation)
-}
-
-async fn local_rewrite_result(
-    config: &Config,
-    rewrite_service: Option<&RewriteService>,
-    model_path: &Path,
-    rewrite_transcript: &crate::rewrite_protocol::RewriteTranscript,
-    custom_instructions: Option<&str>,
-) -> crate::error::Result<String> {
-    if !crate::rewrite::local_rewrite_available() {
-        return Err(crate::error::WhsprError::Rewrite(
-            "local rewrite is unavailable in this build; rebuild with --features local-rewrite"
-                .into(),
-        ));
-    }
-
-    if let Some(service) = rewrite_service {
-        rewrite_worker::rewrite_with_service(
-            service,
-            &config.rewrite,
-            rewrite_transcript,
-            custom_instructions,
-        )
-        .await
-    } else {
-        rewrite_worker::rewrite_transcript(
-            &config.rewrite,
-            model_path,
-            rewrite_transcript,
-            custom_instructions,
-        )
-        .await
-    }
+    .with_operation(plan.operation)
 }
 
 fn finalize_plain_text(
