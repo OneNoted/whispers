@@ -67,9 +67,16 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
 
     let mut rewrite_model = None;
     let mut postprocess_mode = PostprocessMode::Raw;
-    if ui.confirm("Enable smarter local rewrite cleanup?", false)? {
+    if crate::rewrite::local_rewrite_available()
+        && ui.confirm("Enable smarter local rewrite cleanup?", false)?
+    {
         rewrite_model = Some(choose_rewrite_model(&ui, "Choose a local rewrite model", 1).await?);
         postprocess_mode = choose_rewrite_mode(&ui)?;
+    } else if !crate::rewrite::local_rewrite_available() {
+        ui.print_info(
+            "This build does not include local rewrite support. You can still enable cloud rewrite.",
+        );
+        ui.blank();
     }
 
     let cloud = if ui.confirm("Add optional cloud ASR or rewrite?", false)? {
@@ -370,16 +377,23 @@ async fn configure_cloud(
     }
 
     if cloud.rewrite_enabled {
-        let fallback_items = [
-            "Use local rewrite fallback",
-            "Fail back to deterministic text",
-        ];
-        let selection = ui.select("If cloud rewrite fails", &fallback_items, 0)?;
-        cloud.rewrite_fallback = if selection == 0 {
-            RewriteFallback::Local
+        if crate::rewrite::local_rewrite_available() {
+            let fallback_items = [
+                "Use local rewrite fallback",
+                "Fail back to deterministic text",
+            ];
+            let selection = ui.select("If cloud rewrite fails", &fallback_items, 0)?;
+            cloud.rewrite_fallback = if selection == 0 {
+                RewriteFallback::Local
+            } else {
+                RewriteFallback::None
+            };
         } else {
-            RewriteFallback::None
-        };
+            cloud.rewrite_fallback = RewriteFallback::None;
+            ui.print_info(
+                "Local rewrite fallback is unavailable in this build; cloud rewrite will fall back to deterministic text.",
+            );
+        }
     }
 
     if cloud.rewrite_enabled
@@ -495,7 +509,11 @@ fn apply_runtime_backend_selection(
         RewriteBackend::Local
     };
     let rewrite_fallback = if cloud.rewrite_enabled {
-        cloud.rewrite_fallback
+        if crate::rewrite::local_rewrite_available() {
+            cloud.rewrite_fallback
+        } else {
+            RewriteFallback::None
+        }
     } else {
         RewriteFallback::Local
     };
@@ -549,5 +567,25 @@ mod tests {
             config.transcription.fallback,
             TranscriptionFallback::ConfiguredLocal
         );
+    }
+
+    #[cfg(not(feature = "local-rewrite"))]
+    #[test]
+    fn runtime_selection_disables_local_rewrite_fallback_when_build_lacks_local_rewrite() {
+        let config_path =
+            crate::test_support::unique_temp_path("setup-rewrite-fallback-reset", "toml");
+        config::write_default_config(&config_path, "~/model.bin").expect("write config");
+
+        let cloud = CloudSetup {
+            rewrite_enabled: true,
+            rewrite_fallback: RewriteFallback::Local,
+            ..CloudSetup::default()
+        };
+        apply_runtime_backend_selection(&config_path, TranscriptionBackend::WhisperCpp, &cloud)
+            .expect("apply runtime");
+
+        let config = Config::load(Some(&config_path)).expect("load config");
+        assert_eq!(config.rewrite.backend, RewriteBackend::Cloud);
+        assert_eq!(config.rewrite.fallback, RewriteFallback::None);
     }
 }

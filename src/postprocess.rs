@@ -120,6 +120,10 @@ pub fn prepare_rewrite_service(config: &Config) -> Option<RewriteService> {
         return None;
     }
 
+    if !crate::rewrite::local_rewrite_available() {
+        return None;
+    }
+
     let model_path = resolve_rewrite_model_path(config)?;
     Some(rewrite_worker::RewriteService::new(
         &config.rewrite,
@@ -143,9 +147,25 @@ async fn rewrite_transcript_or_fallback(
     recent_session: Option<&EligibleSessionEntry>,
 ) -> FinalizedTranscript {
     let fallback = base_text(config, transcript);
+    let local_rewrite_available = crate::rewrite::local_rewrite_available();
+    let local_backend_requested = config.rewrite.backend == RewriteBackend::Local;
     let local_model_path = resolve_rewrite_model_path(config);
-    let local_rewrite_required = config.rewrite.backend == RewriteBackend::Local
-        || config.rewrite.fallback == RewriteFallback::Local;
+    if local_backend_requested && !local_rewrite_available {
+        tracing::warn!(
+            "local rewrite backend requested, but this build does not include local rewrite support; using fallback"
+        );
+        return finalize_plain_text(
+            fallback,
+            SessionRewriteSummary {
+                had_edit_cues: false,
+                rewrite_used: false,
+                recommended_candidate: None,
+            },
+            rules,
+        );
+    }
+    let local_rewrite_required = local_backend_requested
+        || (config.rewrite.fallback == RewriteFallback::Local && local_rewrite_available);
     if local_rewrite_required && local_model_path.is_none() {
         tracing::warn!(
             "rewrite backend requires a local model but none is configured; using fallback"
@@ -251,7 +271,10 @@ async fn rewrite_transcript_or_fallback(
             };
             match cloud_result {
                 Ok(text) => Ok(text),
-                Err(err) if config.rewrite.fallback == RewriteFallback::Local => {
+                Err(err)
+                    if config.rewrite.fallback == RewriteFallback::Local
+                        && local_rewrite_available =>
+                {
                     tracing::warn!("cloud rewrite failed: {err}; falling back to local rewrite");
                     local_rewrite_result(
                         config,
@@ -342,6 +365,13 @@ async fn local_rewrite_result(
     rewrite_transcript: &crate::rewrite_protocol::RewriteTranscript,
     custom_instructions: Option<&str>,
 ) -> crate::error::Result<String> {
+    if !crate::rewrite::local_rewrite_available() {
+        return Err(crate::error::WhsprError::Rewrite(
+            "local rewrite is unavailable in this build; rebuild with --features local-rewrite"
+                .into(),
+        ));
+    }
+
     if let Some(service) = rewrite_service {
         rewrite_worker::rewrite_with_service(
             service,

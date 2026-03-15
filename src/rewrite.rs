@@ -1,22 +1,34 @@
+#[cfg(feature = "local-rewrite")]
 use std::num::NonZeroU32;
+#[cfg(feature = "local-rewrite")]
 use std::path::Path;
+#[cfg(feature = "local-rewrite")]
 use std::sync::OnceLock;
 
+#[cfg(feature = "local-rewrite")]
 use encoding_rs::UTF_8;
+#[cfg(feature = "local-rewrite")]
 use llama_cpp_2::context::params::LlamaContextParams;
+#[cfg(feature = "local-rewrite")]
 use llama_cpp_2::llama_backend::LlamaBackend;
+#[cfg(feature = "local-rewrite")]
 use llama_cpp_2::llama_batch::LlamaBatch;
+#[cfg(feature = "local-rewrite")]
 use llama_cpp_2::model::params::LlamaModelParams;
+#[cfg(feature = "local-rewrite")]
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
+#[cfg(feature = "local-rewrite")]
 use llama_cpp_2::openai::OpenAIChatTemplateParams;
+#[cfg(feature = "local-rewrite")]
 use llama_cpp_2::sampling::LlamaSampler;
+#[cfg(any(test, feature = "local-rewrite"))]
 use serde_json::json;
 
 use crate::rewrite_profile::ResolvedRewriteProfile;
 use crate::rewrite_profile::RewriteProfile;
 use crate::rewrite_protocol::RewriteTranscript;
 
-#[allow(dead_code)]
+#[cfg(feature = "local-rewrite")]
 pub struct LocalRewriter {
     model: LlamaModel,
     chat_template: LlamaChatTemplate,
@@ -25,9 +37,9 @@ pub struct LocalRewriter {
     max_output_chars: usize,
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "local-rewrite")]
 static LLAMA_BACKEND: OnceLock<&'static LlamaBackend> = OnceLock::new();
-#[allow(dead_code)]
+#[cfg(feature = "local-rewrite")]
 static EXTERNAL_LLAMA_BACKEND: LlamaBackend = LlamaBackend {};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +48,7 @@ pub struct RewritePrompt {
     pub user: String,
 }
 
+#[cfg(feature = "local-rewrite")]
 impl LocalRewriter {
     #[allow(dead_code)]
     pub fn new(
@@ -189,7 +202,7 @@ impl LocalRewriter {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "local-rewrite")]
 fn llama_backend() -> std::result::Result<&'static LlamaBackend, String> {
     if let Some(backend) = LLAMA_BACKEND.get().copied() {
         return Ok(backend);
@@ -217,7 +230,7 @@ fn llama_backend() -> std::result::Result<&'static LlamaBackend, String> {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "local-rewrite")]
 fn build_rewrite_prompt(
     model: &LlamaModel,
     chat_template: &LlamaChatTemplate,
@@ -242,6 +255,7 @@ fn build_rewrite_prompt(
         .map_err(|e| format!("failed to apply rewrite chat template: {e}"))
 }
 
+#[cfg(feature = "local-rewrite")]
 fn build_qwen_rewrite_prompt(
     model: &LlamaModel,
     chat_template: &LlamaChatTemplate,
@@ -272,6 +286,7 @@ fn build_qwen_rewrite_prompt(
     Ok(result.prompt)
 }
 
+#[cfg(any(test, feature = "local-rewrite"))]
 fn build_oaicompat_messages_json(prompt: &RewritePrompt) -> std::result::Result<String, String> {
     serde_json::to_string(&vec![
         json!({
@@ -295,6 +310,16 @@ pub fn build_prompt(
         system: build_system_instructions(transcript, profile, custom_instructions),
         user: build_user_message(transcript),
     })
+}
+
+#[cfg(feature = "local-rewrite")]
+pub const fn local_rewrite_available() -> bool {
+    true
+}
+
+#[cfg(not(feature = "local-rewrite"))]
+pub const fn local_rewrite_available() -> bool {
+    false
 }
 
 #[allow(dead_code)]
@@ -370,14 +395,14 @@ fn agentic_latitude_contract(
     }
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "local-rewrite")]
 struct RewriteBehavior {
     top_k: i32,
     top_p: f32,
     temperature: f32,
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "local-rewrite")]
 fn rewrite_behavior(profile: ResolvedRewriteProfile) -> RewriteBehavior {
     match profile {
         ResolvedRewriteProfile::Qwen => RewriteBehavior {
