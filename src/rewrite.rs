@@ -1,3 +1,5 @@
+mod routing;
+
 #[cfg(feature = "local-rewrite")]
 use std::num::NonZeroU32;
 #[cfg(feature = "local-rewrite")]
@@ -27,6 +29,10 @@ use serde_json::json;
 use crate::rewrite_profile::ResolvedRewriteProfile;
 use crate::rewrite_profile::RewriteProfile;
 use crate::rewrite_protocol::RewriteTranscript;
+use routing::{
+    RewriteRoute, has_policy_context, has_strong_explicit_edit_cue,
+    requires_candidate_adjudication, rewrite_route,
+};
 
 #[cfg(feature = "local-rewrite")]
 pub struct LocalRewriter {
@@ -483,14 +489,6 @@ not keep the spoken correction phrase itself unless the transcript clearly still
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RewriteRoute {
-    Fast,
-    ResolvedCorrection,
-    SessionCandidateAdjudication,
-    CandidateAdjudication,
-}
-
 fn build_user_message(transcript: &RewriteTranscript) -> String {
     let language = transcript.detected_language.as_deref().unwrap_or("unknown");
     let correction_aware = transcript.correction_aware_text.trim();
@@ -703,38 +701,6 @@ Glossary-backed candidates:\n\
             )
         })
         .unwrap_or_default()
-}
-
-fn rewrite_route(transcript: &RewriteTranscript) -> RewriteRoute {
-    if has_session_backtrack_candidate(transcript) {
-        RewriteRoute::SessionCandidateAdjudication
-    } else if requires_candidate_adjudication(transcript) {
-        RewriteRoute::CandidateAdjudication
-    } else if transcript.correction_aware_text.trim() != transcript.raw_text.trim() {
-        RewriteRoute::ResolvedCorrection
-    } else {
-        RewriteRoute::Fast
-    }
-}
-
-fn requires_candidate_adjudication(transcript: &RewriteTranscript) -> bool {
-    !transcript.edit_signals.is_empty() || !transcript.edit_hypotheses.is_empty()
-}
-
-fn has_strong_explicit_edit_cue(transcript: &RewriteTranscript) -> bool {
-    transcript.edit_hypotheses.iter().any(|hypothesis| {
-        hypothesis.strength == crate::rewrite_protocol::RewriteEditSignalStrength::Strong
-            && matches!(
-                hypothesis.match_source,
-                crate::rewrite_protocol::RewriteEditHypothesisMatchSource::Exact
-                    | crate::rewrite_protocol::RewriteEditHypothesisMatchSource::Alias
-            )
-    })
-}
-
-fn has_session_backtrack_candidate(transcript: &RewriteTranscript) -> bool {
-    transcript.recommended_session_candidate.is_some()
-        || !transcript.session_backtrack_candidates.is_empty()
 }
 
 fn render_edit_intents(transcript: &RewriteTranscript) -> String {
@@ -1092,10 +1058,6 @@ fn render_glossary_candidates(transcript: &RewriteTranscript) -> String {
         .iter()
         .map(|candidate| format!("- {}\n", candidate.text))
         .collect()
-}
-
-fn has_policy_context(transcript: &RewriteTranscript) -> bool {
-    transcript.policy_context.is_active()
 }
 
 #[allow(dead_code)]
