@@ -1,6 +1,6 @@
 # Whispers Refactor Plan
 
-Status: active
+Status: complete
 Workspace: `refactor-plan` at `/home/notes/Projects/whispers-refactor-plan`
 Planning goal: reduce module sprawl and dependency tangles without mixing in feature work or behavior changes.
 
@@ -30,7 +30,7 @@ The main mess is not the top-level flow. The main mess is that a few large modul
 2. Fix dependency direction in the runtime path.
 3. Split the largest domain modules by responsibility.
 4. Split config/setup/model/completion orchestration.
-5. Finish with platform adapters and status reporting cleanup.
+5. Finish with platform adapters and retire stale reporting cleanup if no real surface remains.
 
 ## Phase 1: Crate Boundaries
 
@@ -263,14 +263,15 @@ Goal: separate policy from OS effects in smaller but high-value modules.
 
 ### Checkpoint 5.3
 
-- Commit: `refactor: build status snapshots before rendering`
+- Commit: `docs: retire stale status reporting checkpoint`
 - Status:
-  - note: `src/status.rs` is not present in the current tree, so this checkpoint needs re-scoping to a real reporting surface before implementation
+  - completed sub-checkpoints: verified that `src/status.rs` is absent, confirmed earlier checkpoints already split the remaining real reporting surfaces (`setup/report.rs` and model status rendering), retired the stale roadmap item instead of inventing a fake module
+  - phase status: complete
 - Deliverables:
-  - Make `src/status.rs` build a pure status snapshot first, then render it.
-  - Reduce direct backend probing inside rendering code.
+  - Confirm whether a standalone status/reporting module still exists in the current tree.
+  - Retire the stale checkpoint if the earlier refactors already covered the real reporting surfaces.
 - Validation:
-  - `cargo test status`
+  - manual codebase search for reporting surfaces
 
 ## Not Now
 
@@ -310,4 +311,4 @@ Use this each time work starts on a new item:
 - [x] Phase 4.5 complete
 - [x] Phase 5.1 complete
 - [x] Phase 5.2 complete
-- [ ] Phase 5.3 complete
+- [x] Phase 5.3 complete
