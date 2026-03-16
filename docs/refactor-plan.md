@@ -132,6 +132,9 @@ Goal: split large pure-ish logic files by domain instead of by size.
 ### Checkpoint 3.1
 
 - Commit: `refactor: split personalization store and rewrite candidates`
+- Status:
+  - completed sub-checkpoints: extracted file-backed dictionary/snippet store, moved rewrite transcript and candidate generation out of the facade, kept `crate::personalization::*` call sites stable via re-exports
+  - phase status: complete
 - Deliverables:
   - Split `src/personalization.rs` into:
     - store and CLI mutation helpers
@@ -268,7 +271,7 @@ Use this each time work starts on a new item:
 - [x] Phase 2.3 complete
 - [x] Phase 2.4 complete
 - [x] Phase 2.5 complete
-- [ ] Phase 3.1 complete
+- [x] Phase 3.1 complete
 - [ ] Phase 3.2 complete
 - [ ] Phase 3.3 complete
 - [ ] Phase 4.1 complete
