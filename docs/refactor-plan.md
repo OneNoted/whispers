@@ -113,6 +113,9 @@ Goal: make the dictation path read as orchestration over smaller components inst
 ### Checkpoint 2.5
 
 - Commit: `refactor: split app controller from dictation runtime state`
+- Status:
+  - completed sub-checkpoints: extracted runtime state transitions, isolated OSD helpers, kept `run()` as controller orchestration
+  - phase status: complete
 - Deliverables:
   - Keep `src/app.rs` as orchestration.
   - Extract dictation runtime state, preview pacing, session updates, and injection decisions into smaller modules.
@@ -264,7 +267,7 @@ Use this each time work starts on a new item:
 - [x] Phase 2.2 complete
 - [x] Phase 2.3 complete
 - [x] Phase 2.4 complete
-- [ ] Phase 2.5 complete
+- [x] Phase 2.5 complete
 - [ ] Phase 3.1 complete
 - [ ] Phase 3.2 complete
 - [ ] Phase 3.3 complete
