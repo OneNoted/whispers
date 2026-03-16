@@ -200,6 +200,9 @@ Goal: remove duplicated sources of truth and reduce direct file mutation from hi
 ### Checkpoint 4.3
 
 - Commit: `refactor: unify model management workflows`
+- Status:
+  - completed sub-checkpoints: extracted shared model config/bootstrap helpers, centralized common download/status logic, trimmed backend-specific model modules down to catalog and backend behavior
+  - phase status: complete
 - Deliverables:
   - Reduce duplication across `src/model.rs`, `src/asr_model.rs`, and `src/rewrite_model.rs`.
   - Share download/select/status plumbing where behavior is actually the same.
@@ -288,7 +291,7 @@ Use this each time work starts on a new item:
 - [x] Phase 3.3 complete
 - [x] Phase 4.1 complete
 - [x] Phase 4.2 complete
-- [ ] Phase 4.3 complete
+- [x] Phase 4.3 complete
 - [ ] Phase 4.4 complete
 - [ ] Phase 4.5 complete
 - [ ] Phase 5.1 complete

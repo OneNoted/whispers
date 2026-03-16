@@ -17,6 +17,7 @@ pub mod feedback;
 pub mod file_audio;
 pub mod inject;
 pub mod model;
+pub(crate) mod model_support;
 pub mod nemo_asr;
 pub mod personalization;
 pub mod postprocess;

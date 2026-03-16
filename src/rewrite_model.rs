@@ -1,12 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use futures_util::StreamExt;
-use tokio::io::AsyncWriteExt;
-
-use crate::config::{
-    self, RewriteBackend, data_dir, resolve_config_path, update_config_rewrite_selection,
-};
+use crate::config::{self, RewriteBackend, data_dir, update_config_rewrite_selection};
 use crate::error::{Result, WhsprError};
+use crate::model_support;
 use crate::rewrite_profile::RewriteProfile;
 
 pub struct RewriteModelInfo {
@@ -71,25 +67,15 @@ pub fn managed_profile(name: &str) -> Option<RewriteProfile> {
 }
 
 fn active_model_name(config_path_override: Option<&Path>) -> Option<String> {
-    let config_path = resolve_config_path(config_path_override);
-    if !config_path.exists() {
-        return None;
-    }
-    let config = config::Config::load(Some(&config_path)).ok()?;
-    Some(config.rewrite.selected_model)
+    model_support::load_config_if_exists(config_path_override)
+        .map(|config| config.rewrite.selected_model)
 }
 
 fn model_status(info: &RewriteModelInfo, active_name: Option<&str>) -> &'static str {
     let path = model_path(info.filename);
     let is_active = active_name == Some(info.name);
     let is_local = path.exists();
-
-    match (is_active, is_local) {
-        (true, true) => "active",
-        (true, false) => "active (missing)",
-        (_, true) => "local",
-        _ => "remote",
-    }
+    model_support::managed_download_status(is_active, is_local)
 }
 
 pub fn list_models(config_path_override: Option<&Path>) {
@@ -134,78 +120,18 @@ pub async fn download_model(name: &str) -> Result<PathBuf> {
 pub async fn download_model_with_url(info: &RewriteModelInfo, url: &str) -> Result<PathBuf> {
     let dest = model_path(info.filename);
     let part_path = dest.with_extension("gguf.part");
-
-    if dest.exists() {
-        tracing::info!(
-            "rewrite model '{}' already downloaded at {}",
-            info.name,
-            dest.display()
-        );
-        println!("{}", crate::ui::ready_message("Rewrite", info.name));
-        return Ok(dest);
-    }
-
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| WhsprError::Download(format!("failed to create data directory: {e}")))?;
-    }
-
-    tracing::info!("downloading rewrite model '{}' from {}", info.name, url);
-    println!(
-        "{} Downloading rewrite model {} ({})...",
-        crate::ui::info_label(),
-        crate::ui::value(info.name),
-        info.size
-    );
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| WhsprError::Download(format!("failed to start download: {e}")))?;
-
-    if !response.status().is_success() {
-        return Err(WhsprError::Download(format!(
-            "download failed with HTTP {}",
-            response.status()
-        )));
-    }
-
-    let total_size = response.content_length().unwrap_or(0);
-    let pb = crate::ui::progress_bar(total_size);
-
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&part_path)
-        .await
-        .map_err(|e| WhsprError::Download(format!("failed to open file: {e}")))?;
-
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| WhsprError::Download(format!("download interrupted: {e}")))?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| WhsprError::Download(format!("failed to write: {e}")))?;
-        pb.inc(chunk.len() as u64);
-    }
-
-    file.flush()
-        .await
-        .map_err(|e| WhsprError::Download(format!("failed to flush: {e}")))?;
-    drop(file);
-
-    pb.finish_with_message("done");
-
-    std::fs::rename(&part_path, &dest)
-        .map_err(|e| WhsprError::Download(format!("failed to finalize download: {e}")))?;
-
-    tracing::info!("rewrite model '{}' saved to {}", info.name, dest.display());
-    println!("{}", crate::ui::ready_message("Rewrite", info.name));
-    Ok(dest)
+    model_support::download_to_path(model_support::DownloadSpec {
+        tracing_label: "rewrite model",
+        user_label: "rewrite model",
+        ready_kind: "Rewrite",
+        item_name: info.name,
+        size: info.size,
+        url,
+        dest,
+        part_path,
+        resume_partial: false,
+    })
+    .await
 }
 
 pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<()> {
@@ -220,14 +146,12 @@ pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<(
         )));
     }
 
-    let config_path = resolve_config_path(config_path_override);
-    if !config_path.exists() {
-        let whisper_model = config::Config::default().transcription.model_path;
-        config::write_default_config(&config_path, &whisper_model)?;
-    }
+    let whisper_model = config::Config::default().transcription.model_path;
+    let (config_path, _) =
+        model_support::ensure_default_config(config_path_override, &whisper_model)?;
 
     update_config_rewrite_selection(&config_path, info.name)?;
-    if config::Config::load(Some(&config_path))
+    if model_support::load_config_at_if_exists(&config_path)
         .map(|config| config.rewrite.backend == RewriteBackend::Cloud)
         .unwrap_or(false)
     {
