@@ -214,6 +214,9 @@ Goal: remove duplicated sources of truth and reduce direct file mutation from hi
 ### Checkpoint 4.4
 
 - Commit: `refactor: isolate shell completion installers`
+- Status:
+  - completed sub-checkpoints: split shell detection from completion rendering, kept `run_completions` as the thin entrypoint, noted that the current tree does not yet include install-path or shell-rc mutation logic
+  - phase status: complete
 - Deliverables:
   - Separate shell detection, script generation, install-path policy, and shell rc mutation in `src/completions.rs`.
 - Validation:
@@ -292,7 +295,7 @@ Use this each time work starts on a new item:
 - [x] Phase 4.1 complete
 - [x] Phase 4.2 complete
 - [x] Phase 4.3 complete
-- [ ] Phase 4.4 complete
+- [x] Phase 4.4 complete
 - [ ] Phase 4.5 complete
 - [ ] Phase 5.1 complete
 - [ ] Phase 5.2 complete
