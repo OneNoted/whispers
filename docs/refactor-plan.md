@@ -21,7 +21,7 @@ The main mess is not the top-level flow. The main mess is that a few large modul
 - `src/postprocess.rs` mixes planning, backend routing, fallback, and finalization.
 - `src/agentic_rewrite.rs` mixes runtime policy logic with file-backed CLI admin.
 - `src/asr.rs` duplicates backend lifecycle logic across batch and live paths.
-- `src/voice.rs` mixes orchestration, live preview state, injection policy, and session persistence.
+- `src/app.rs` mixes orchestration, runtime state, injection policy, and session persistence.
 - `src/personalization.rs`, `src/session.rs`, `src/config.rs`, and `src/setup.rs` each bundle multiple separate concerns.
 
 ## Recommended Order
@@ -101,8 +101,8 @@ Goal: make the dictation path read as orchestration over smaller components inst
 
 - Commit: `refactor: split rewrite routing from prompt rendering`
 - Status:
-  - completed sub-checkpoints: routing split, prompt rendering split, local rewrite engine extraction
-  - remaining sub-checkpoint: output cleanup plus thin facade
+  - completed sub-checkpoints: routing split, prompt rendering split, local rewrite engine extraction, output cleanup plus thin facade
+  - phase status: complete
 - Deliverables:
   - Separate route selection from prompt/template rendering in `src/rewrite.rs`.
   - Keep giant prompt contracts out of routing logic.
@@ -112,13 +112,13 @@ Goal: make the dictation path read as orchestration over smaller components inst
 
 ### Checkpoint 2.5
 
-- Commit: `refactor: split voice controller from live state machines`
+- Commit: `refactor: split app controller from dictation runtime state`
 - Deliverables:
-  - Keep `src/voice.rs` as orchestration.
-  - Extract live preview pacing, transcript accumulation, and live injection state into smaller modules.
-  - Minimize direct side effects inside the partial-tick logic.
+  - Keep `src/app.rs` as orchestration.
+  - Extract dictation runtime state, preview pacing, session updates, and injection decisions into smaller modules.
+  - Minimize direct side effects inside the main dictation loop.
 - Validation:
-  - `cargo test voice`
+  - `cargo test app`
   - `cargo test session`
   - targeted manual smoke test for `whispers voice`
 
@@ -263,7 +263,7 @@ Use this each time work starts on a new item:
 - [x] Phase 2.1 complete
 - [x] Phase 2.2 complete
 - [x] Phase 2.3 complete
-- [ ] Phase 2.4 complete
+- [x] Phase 2.4 complete
 - [ ] Phase 2.5 complete
 - [ ] Phase 3.1 complete
 - [ ] Phase 3.2 complete
