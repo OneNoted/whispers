@@ -242,6 +242,9 @@ Goal: separate policy from OS effects in smaller but high-value modules.
 ### Checkpoint 5.1
 
 - Commit: `refactor: extract injection adapter layer`
+- Status:
+  - completed sub-checkpoints: split clipboard process handling from virtual keyboard emission, kept `TextInjector` as the stable policy/orchestration facade for runtime callers
+  - phase status: complete
 - Deliverables:
   - Separate injection policy from evdev and clipboard execution in `src/inject.rs`.
 - Validation:
@@ -300,6 +303,6 @@ Use this each time work starts on a new item:
 - [x] Phase 4.3 complete
 - [x] Phase 4.4 complete
 - [x] Phase 4.5 complete
-- [ ] Phase 5.1 complete
+- [x] Phase 5.1 complete
 - [ ] Phase 5.2 complete
 - [ ] Phase 5.3 complete
