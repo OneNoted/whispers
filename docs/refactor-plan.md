@@ -188,6 +188,9 @@ Goal: remove duplicated sources of truth and reduce direct file mutation from hi
 ### Checkpoint 4.2
 
 - Commit: `refactor: extract setup flow phases`
+- Status:
+  - completed sub-checkpoints: separated interactive selection from config application, isolated post-apply side effects, moved summary and completion rendering out of the flow orchestrator
+  - phase status: complete
 - Deliverables:
   - Break `src/setup.rs` into prompt/selection, config apply, side effects, and summary/reporting phases.
   - Keep interactive behavior unchanged.
@@ -284,7 +287,7 @@ Use this each time work starts on a new item:
 - [x] Phase 3.2 complete
 - [x] Phase 3.3 complete
 - [x] Phase 4.1 complete
-- [ ] Phase 4.2 complete
+- [x] Phase 4.2 complete
 - [ ] Phase 4.3 complete
 - [ ] Phase 4.4 complete
 - [ ] Phase 4.5 complete
