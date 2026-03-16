@@ -175,6 +175,9 @@ Goal: remove duplicated sources of truth and reduce direct file mutation from hi
 ### Checkpoint 4.1
 
 - Commit: `refactor: split config schema defaults and editing`
+- Status:
+  - completed sub-checkpoints: extracted schema/default types, split load and legacy migration logic from path helpers, isolated TOML mutation helpers behind the root `crate::config::*` facade
+  - phase status: complete
 - Deliverables:
   - Split `src/config.rs` into schema, defaults/template, load/migrate, and edit/update modules.
   - Put TOML mutation behind a small config editor API.
@@ -280,7 +283,7 @@ Use this each time work starts on a new item:
 - [x] Phase 3.1 complete
 - [x] Phase 3.2 complete
 - [x] Phase 3.3 complete
-- [ ] Phase 4.1 complete
+- [x] Phase 4.1 complete
 - [ ] Phase 4.2 complete
 - [ ] Phase 4.3 complete
 - [ ] Phase 4.4 complete
