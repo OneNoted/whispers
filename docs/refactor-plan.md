@@ -146,6 +146,9 @@ Goal: split large pure-ish logic files by domain instead of by size.
 ### Checkpoint 3.2
 
 - Commit: `refactor: split session persistence from backtrack planning`
+- Status:
+  - completed sub-checkpoints: extracted runtime session persistence, isolated backtrack heuristics and typing-context mapping, kept `crate::session::*` paths stable via re-exports
+  - phase status: complete
 - Deliverables:
   - Move JSON load/save/prune logic away from backtrack heuristics.
   - Make backtrack planning operate on in-memory data structures.
@@ -272,7 +275,7 @@ Use this each time work starts on a new item:
 - [x] Phase 2.4 complete
 - [x] Phase 2.5 complete
 - [x] Phase 3.1 complete
-- [ ] Phase 3.2 complete
+- [x] Phase 3.2 complete
 - [ ] Phase 3.3 complete
 - [ ] Phase 4.1 complete
 - [ ] Phase 4.2 complete
