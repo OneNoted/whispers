@@ -1,6 +1,7 @@
 use super::RewritePrompt;
 use super::routing::{
-    RewriteRoute, has_policy_context, has_strong_explicit_edit_cue, rewrite_route,
+    RewriteRoute, has_policy_context, has_strong_explicit_edit_cue,
+    requires_candidate_adjudication, rewrite_route,
 };
 use crate::rewrite_profile::{ResolvedRewriteProfile, RewriteProfile};
 use crate::rewrite_protocol::RewriteTranscript;
@@ -23,6 +24,45 @@ pub fn resolved_profile_for_cloud(profile: RewriteProfile) -> ResolvedRewritePro
         RewriteProfile::Qwen => ResolvedRewriteProfile::Qwen,
         RewriteProfile::LlamaCompat => ResolvedRewriteProfile::LlamaCompat,
     }
+}
+
+pub fn build_oaicompat_messages_json(
+    prompt: &RewritePrompt,
+) -> std::result::Result<String, String> {
+    serde_json::to_string(&[
+        serde_json::json!({
+            "role": "system",
+            "content": prompt.system,
+        }),
+        serde_json::json!({
+            "role": "user",
+            "content": prompt.user,
+        }),
+    ])
+    .map_err(|e| format!("failed to encode rewrite chat messages: {e}"))
+}
+
+pub fn effective_max_tokens(max_tokens: usize, transcript: &RewriteTranscript) -> usize {
+    let word_count = transcript
+        .correction_aware_text
+        .split_whitespace()
+        .filter(|word| !word.is_empty())
+        .count();
+    let extra_budget = if requires_candidate_adjudication(transcript) {
+        24
+    } else {
+        0
+    };
+    let minimum = if requires_candidate_adjudication(transcript) {
+        64
+    } else {
+        48
+    };
+    let derived = word_count
+        .saturating_mul(2)
+        .saturating_add(24)
+        .saturating_add(extra_budget);
+    derived.clamp(minimum, max_tokens)
 }
 
 pub(crate) fn build_system_instructions(

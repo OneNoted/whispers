@@ -8,7 +8,18 @@ license = "MPL-2.0"
 repository = "https://github.com/OneNoted/whispers"
 keywords = ["wayland", "speech-to-text", "whisper", "dictation", "voice"]
 categories = ["accessibility", "multimedia"]
-exclude = [".jj/", ".git/", "target/"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "config.example.toml",
+    ".cargo/config.toml",
+    "sounds/*.wav",
+    "src/**",
+    "vendor/whisper-rs-sys/**/*",
+]
 
 [dependencies]
 # Async runtime
@@ -81,8 +92,11 @@ required-features = ["osd"]
 
 [[bin]]
 name = "whispers-rewrite-worker"
-path = "src/bin/whispers-rewrite-worker.rs"
+path = "src/bin/whispers-rewrite-worker/main.rs"
 required-features = ["local-rewrite"]
 
 [dev-dependencies]
 httpmock = "0.7"
+
+[patch.crates-io]
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }

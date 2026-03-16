@@ -1,6 +1,8 @@
 use super::RewritePrompt;
-use super::local::{build_oaicompat_messages_json, effective_max_tokens};
-use super::prompt::{build_system_instructions, build_user_message, rewrite_instructions};
+use super::prompt::{
+    build_oaicompat_messages_json, build_system_instructions, build_user_message,
+    effective_max_tokens, rewrite_instructions,
+};
 use super::routing::{RewriteRoute, rewrite_route};
 use crate::rewrite_profile::ResolvedRewriteProfile;
 use crate::rewrite_protocol::{
