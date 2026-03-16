@@ -9,8 +9,8 @@ use super::{
     TranscriptionFallback,
 };
 
-pub fn write_default_config(path: &Path, model_path: &str) -> Result<()> {
-    let contents = format!(
+pub(crate) fn default_config_template(model_path: &str) -> String {
+    format!(
         r#"# whispers configuration
 #
 # Keybinding is handled by your compositor. Example for Hyprland:
@@ -136,7 +136,11 @@ enabled = true
 start_sound = ""
 stop_sound = ""
 "#
-    );
+    )
+}
+
+pub fn write_default_config(path: &Path, model_path: &str) -> Result<()> {
+    let contents = default_config_template(model_path);
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

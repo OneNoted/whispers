@@ -237,3 +237,12 @@ api_key_env = "sk-test-inline"
     assert_eq!(loaded.cloud.api_key, "sk-test-inline");
     assert_eq!(loaded.cloud.api_key_env, "OPENAI_API_KEY");
 }
+
+#[test]
+fn default_config_template_matches_example_file() {
+    let example_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.example.toml");
+    let example = std::fs::read_to_string(&example_path).expect("read config example");
+    let expected =
+        super::edit::default_config_template("~/.local/share/whispers/ggml-large-v3-turbo.bin");
+    assert_eq!(example, expected);
+}

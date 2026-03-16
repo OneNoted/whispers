@@ -177,78 +177,15 @@ bindsym $mod+Alt+d exec whispers
 
 ## Configuration
 
-Config lives at `~/.config/whispers/config.toml` by default. Generated automatically by `whispers setup`, or copy from `config.example.toml`:
+Config lives at `~/.config/whispers/config.toml` by default. It is generated automatically by `whispers setup`, and the canonical example lives in [`config.example.toml`](config.example.toml). That example is kept in sync with the built-in template written by setup.
 
-```toml
-[audio]
-device = ""            # empty = system default
-sample_rate = 16000
+The main knobs to look at first are:
 
-[transcription]
-backend = "whisper_cpp"  # or "faster_whisper" / "nemo" / "cloud"
-fallback = "configured_local"  # or "none"
-local_backend = "whisper_cpp"
-selected_model = "large-v3-turbo"
-model_path = "~/.local/share/whispers/ggml-large-v3-turbo.bin"
-language = "auto"      # or "en", "fr", "de", etc.
-use_gpu = true         # set false to force CPU
-flash_attn = true      # only used when use_gpu=true
-idle_timeout_ms = 120000
-
-[postprocess]
-mode = "raw"           # or "advanced_local" / "agentic_rewrite"; deprecated: "legacy_basic"
-
-[session]
-enabled = true
-max_entries = 3
-max_age_ms = 8000
-max_replace_graphemes = 400
-
-[personalization]
-dictionary_path = "~/.local/share/whispers/dictionary.toml"
-snippets_path = "~/.local/share/whispers/snippets.toml"
-snippet_trigger = "insert"
-
-[rewrite]
-backend = "local"      # or "cloud"
-fallback = "local"     # or "none"
-selected_model = "qwen-3.5-4b-q4_k_m"
-model_path = ""        # optional manual GGUF path override
-instructions_path = "~/.local/share/whispers/rewrite-instructions.txt"
-profile = "auto"       # or "qwen", "generic", "llama_compat"
-timeout_ms = 30000
-idle_timeout_ms = 120000
-max_output_chars = 1200
-max_tokens = 256
-
-[agentic_rewrite]
-policy_path = "~/.local/share/whispers/app-rewrite-policy.toml"
-glossary_path = "~/.local/share/whispers/technical-glossary.toml"
-default_correction_policy = "balanced"
-
-[cloud]
-provider = "openai"    # or "openai_compatible"
-base_url = ""          # required for openai_compatible
-api_key = ""           # optional direct API key; leave empty to use api_key_env
-api_key_env = "OPENAI_API_KEY"
-connect_timeout_ms = 3000
-request_timeout_ms = 15000
-
-[cloud.transcription]
-model = "gpt-4o-mini-transcribe"
-language_mode = "inherit_local"  # or "force"
-language = ""
-
-[cloud.rewrite]
-model = "gpt-4.1-mini"
-temperature = 0.1
-max_output_tokens = 256
-
-[feedback]
-enabled = true
-start_sound = ""       # empty = bundled sound
-stop_sound = ""
-```
+- `[transcription]` for local/cloud ASR backend selection, model choice, language, and worker idle timeout
+- `[postprocess]`, `[rewrite]`, and `[agentic_rewrite]` for raw vs rewrite modes, local/cloud rewrite routing, and app-aware rewrite policy files
+- `[session]` and `[personalization]` for short-lived correction backtracking, dictionary replacements, and spoken snippets
+- `[cloud]` for optional hosted ASR/rewrite settings and API key configuration
+- `[feedback]` for start/stop sounds
 
 When `advanced_local` or `agentic_rewrite` is enabled, `whispers` also keeps a short-lived local session ledger in the runtime directory so immediate follow-up corrections like `scratch that` can safely replace the most recent dictation entry when focus has not changed. That session behavior is local either way; only the semantic rewrite stage may be cloud-backed.
 

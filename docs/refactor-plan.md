@@ -225,6 +225,9 @@ Goal: remove duplicated sources of truth and reduce direct file mutation from hi
 ### Checkpoint 4.5
 
 - Commit: `docs: derive config docs from canonical source`
+- Status:
+  - completed sub-checkpoints: made the config writer template the canonical source, aligned `config.example.toml` with that template, removed the duplicated README config block in favor of referencing the canonical example
+  - phase status: complete
 - Deliverables:
   - Stop maintaining defaults separately in code, `config.example.toml`, and the README snippet.
   - Pick one canonical source and generate or reuse it everywhere else.
@@ -296,7 +299,7 @@ Use this each time work starts on a new item:
 - [x] Phase 4.2 complete
 - [x] Phase 4.3 complete
 - [x] Phase 4.4 complete
-- [ ] Phase 4.5 complete
+- [x] Phase 4.5 complete
 - [ ] Phase 5.1 complete
 - [ ] Phase 5.2 complete
 - [ ] Phase 5.3 complete
