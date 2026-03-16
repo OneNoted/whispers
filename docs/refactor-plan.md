@@ -159,6 +159,9 @@ Goal: split large pure-ish logic files by domain instead of by size.
 ### Checkpoint 3.3
 
 - Commit: `refactor: split cleanup lexicon analysis and rendering`
+- Status:
+  - completed sub-checkpoints: extracted cue-family lexicon and hypothesis matching, isolated piece rendering, kept `crate::cleanup::*` public APIs stable at the root
+  - phase status: complete
 - Deliverables:
   - Split `src/cleanup.rs` into lexical rules, analysis, and rendering pieces.
   - Keep the public cleanup API stable until follow-up cleanup is done.
@@ -276,7 +279,7 @@ Use this each time work starts on a new item:
 - [x] Phase 2.5 complete
 - [x] Phase 3.1 complete
 - [x] Phase 3.2 complete
-- [ ] Phase 3.3 complete
+- [x] Phase 3.3 complete
 - [ ] Phase 4.1 complete
 - [ ] Phase 4.2 complete
 - [ ] Phase 4.3 complete
