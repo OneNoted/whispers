@@ -253,6 +253,9 @@ Goal: separate policy from OS effects in smaller but high-value modules.
 ### Checkpoint 5.2
 
 - Commit: `refactor: split audio recorder and dsp helpers`
+- Status:
+  - completed sub-checkpoints: split recorder lifecycle and device/config negotiation from reusable DSP helpers, kept `AudioRecorder` and `preprocess_audio` stable for callers
+  - phase status: complete
 - Deliverables:
   - Separate recorder lifecycle and device interaction from reusable audio transforms in `src/audio.rs`.
 - Validation:
@@ -261,6 +264,8 @@ Goal: separate policy from OS effects in smaller but high-value modules.
 ### Checkpoint 5.3
 
 - Commit: `refactor: build status snapshots before rendering`
+- Status:
+  - note: `src/status.rs` is not present in the current tree, so this checkpoint needs re-scoping to a real reporting surface before implementation
 - Deliverables:
   - Make `src/status.rs` build a pure status snapshot first, then render it.
   - Reduce direct backend probing inside rendering code.
@@ -304,5 +309,5 @@ Use this each time work starts on a new item:
 - [x] Phase 4.4 complete
 - [x] Phase 4.5 complete
 - [x] Phase 5.1 complete
-- [ ] Phase 5.2 complete
+- [x] Phase 5.2 complete
 - [ ] Phase 5.3 complete
