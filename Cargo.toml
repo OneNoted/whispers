@@ -77,7 +77,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = tru
 
 [features]
 default = ["osd"]
-cuda = ["whisper-rs/cuda"]
+cuda = ["whisper-rs/cuda", "llama-cpp-2?/cuda"]
 local-rewrite = ["dep:llama-cpp-2"]
 osd = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr"]
 
