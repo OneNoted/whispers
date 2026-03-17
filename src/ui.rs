@@ -354,6 +354,12 @@ impl SetupUi {
     }
 }
 
+impl Default for SetupUi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn prompt_error(err: dialoguer::Error) -> WhsprError {
     WhsprError::Config(format!("prompt cancelled: {err}"))
 }

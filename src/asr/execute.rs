@@ -60,8 +60,8 @@ async fn transcribe_with_prepared(
                 .await
                 .map_err(|e| transcription_task_error(task_label, "transcription", &e))?
         }
-        PreparedTranscriber::Faster(service) => service.transcribe(&audio, sample_rate).await,
-        PreparedTranscriber::Nemo(service) => service.transcribe(&audio, sample_rate).await,
+        PreparedTranscriber::Faster(service) => service.transcribe(audio, sample_rate).await,
+        PreparedTranscriber::Nemo(service) => service.transcribe(audio, sample_rate).await,
         PreparedTranscriber::Cloud(_) => Err(WhsprError::Transcription(
             "cloud transcriber cannot be executed without the caller-owned config".into(),
         )),

@@ -15,6 +15,12 @@ pub struct TextInjector {
     wl_copy_args: Vec<String>,
 }
 
+impl Default for TextInjector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TextInjector {
     pub fn new() -> Self {
         Self {

@@ -115,15 +115,6 @@ impl ContextMatcher {
     }
 
     fn specificity_rank(&self) -> (u8, u8) {
-        let matcher_count = [
-            self.surface_kind.is_some(),
-            self.app_id.is_some(),
-            self.window_title_contains.is_some(),
-            self.browser_domain_contains.is_some(),
-        ]
-        .into_iter()
-        .filter(|present| *present)
-        .count() as u8;
         let strongest_layer = if self.browser_domain_contains.is_some() {
             4
         } else if self.window_title_contains.is_some() {
@@ -135,7 +126,16 @@ impl ContextMatcher {
         } else {
             0
         };
-        (matcher_count, strongest_layer)
+        let matcher_count = [
+            self.surface_kind.is_some(),
+            self.app_id.is_some(),
+            self.window_title_contains.is_some(),
+            self.browser_domain_contains.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count() as u8;
+        (strongest_layer, matcher_count)
     }
 
     fn is_empty(&self) -> bool {
@@ -377,47 +377,84 @@ fn apply_glossary_entries(text: &str, entries: &[PreparedGlossaryEntry]) -> Opti
         return None;
     }
 
-    let mut output = text.to_string();
-    let mut applied_any = false;
-    for entry in entries {
-        let updated = replace_aliases(&output, entry);
-        if updated != output {
-            applied_any = true;
-            output = updated;
-        }
-    }
-
-    applied_any.then_some(output.trim().to_string())
-}
-
-fn replace_aliases(text: &str, entry: &PreparedGlossaryEntry) -> String {
-    if entry.normalized_aliases.is_empty() {
-        return text.to_string();
-    }
-
     let spans = collect_word_spans(text);
     if spans.is_empty() {
-        return text.to_string();
+        return None;
     }
+
+    let mut replacements = collect_glossary_replacements(text, &spans, entries);
+    if replacements.is_empty() {
+        return None;
+    }
+
+    replacements.sort_by_key(|replacement| replacement.start);
 
     let mut output = String::new();
     let mut cursor = 0usize;
-    let mut index = 0usize;
+    for replacement in replacements {
+        output.push_str(&text[cursor..replacement.start]);
+        output.push_str(&replacement.term);
+        cursor = replacement.end;
+    }
+    output.push_str(&text[cursor..]);
+    Some(output.trim().to_string())
+}
 
-    while index < spans.len() {
-        let Some(alias_len) = best_alias_match(&spans, index, &entry.normalized_aliases) else {
-            index += 1;
+fn collect_glossary_replacements(
+    text: &str,
+    spans: &[WordSpan],
+    entries: &[PreparedGlossaryEntry],
+) -> Vec<GlossaryReplacement> {
+    let mut candidates = Vec::new();
+    for (priority, entry) in entries.iter().enumerate() {
+        if entry.normalized_aliases.is_empty() {
             continue;
-        };
+        }
 
-        output.push_str(&text[cursor..spans[index].start]);
-        output.push_str(&entry.term);
-        cursor = spans[index + alias_len - 1].end;
-        index += alias_len;
+        let mut index = 0usize;
+        while index < spans.len() {
+            let Some(alias_len) = best_alias_match(spans, index, &entry.normalized_aliases) else {
+                index += 1;
+                continue;
+            };
+
+            candidates.push(GlossaryReplacement {
+                start: spans[index].start,
+                end: spans[index + alias_len - 1].end,
+                start_span: index,
+                end_span: index + alias_len,
+                term: entry.term.clone(),
+                priority,
+            });
+            index += alias_len;
+        }
     }
 
-    output.push_str(&text[cursor..]);
-    output
+    candidates.sort_by(|left, right| {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then_with(|| {
+                (right.end_span - right.start_span).cmp(&(left.end_span - left.start_span))
+            })
+            .then_with(|| left.start_span.cmp(&right.start_span))
+    });
+
+    let mut selected = Vec::new();
+    for candidate in candidates {
+        if selected.iter().any(|existing: &GlossaryReplacement| {
+            candidate.start_span < existing.end_span && candidate.end_span > existing.start_span
+        }) {
+            continue;
+        }
+        selected.push(candidate);
+    }
+
+    if selected.is_empty() && !text.is_empty() {
+        return Vec::new();
+    }
+
+    selected
 }
 
 fn best_alias_match(spans: &[WordSpan], index: usize, aliases: &[Vec<String>]) -> Option<usize> {
@@ -501,6 +538,16 @@ struct WordSpan {
     start: usize,
     end: usize,
     normalized: String,
+}
+
+#[derive(Debug, Clone)]
+struct GlossaryReplacement {
+    start: usize,
+    end: usize,
+    start_span: usize,
+    end_span: usize,
+    term: String,
+    priority: usize,
 }
 
 #[cfg(test)]
@@ -630,6 +677,50 @@ mod tests {
     }
 
     #[test]
+    fn higher_precedence_matcher_layers_override_lower_layer_combinations() {
+        let rules = vec![
+            AppRule {
+                name: "surface-and-app".into(),
+                matcher: ContextMatcher {
+                    surface_kind: Some(RewriteSurfaceKind::Editor),
+                    app_id: Some("dev.zed.Zed".into()),
+                    ..ContextMatcher::default()
+                },
+                instructions: "surface-and-app".into(),
+                correction_policy: Some(RewriteCorrectionPolicy::Aggressive),
+            },
+            AppRule {
+                name: "window-title".into(),
+                matcher: ContextMatcher {
+                    window_title_contains: Some("serde_json".into()),
+                    ..ContextMatcher::default()
+                },
+                instructions: "window-title".into(),
+                correction_policy: Some(RewriteCorrectionPolicy::Conservative),
+            },
+        ];
+        let context = typing_context(RewriteSurfaceKind::Editor);
+        let policy = resolve_policy_context(
+            RewriteCorrectionPolicy::Balanced,
+            Some(&context),
+            &[],
+            &rules,
+            &[],
+        );
+        assert_eq!(
+            policy.correction_policy,
+            RewriteCorrectionPolicy::Conservative
+        );
+        assert_eq!(
+            policy
+                .effective_rule_instructions
+                .last()
+                .map(String::as_str),
+            Some("window-title")
+        );
+    }
+
+    #[test]
     fn glossary_candidates_follow_matching_scope() {
         let glossary = vec![
             GlossaryEntry {
@@ -665,6 +756,37 @@ mod tests {
             policy.glossary_candidates[0].text,
             "TypeScript and serde_json"
         );
+    }
+
+    #[test]
+    fn glossary_candidates_preserve_scoped_alias_overrides() {
+        let glossary = vec![
+            GlossaryEntry {
+                term: "serde".into(),
+                aliases: vec!["sir dee".into()],
+                matcher: ContextMatcher::default(),
+            },
+            GlossaryEntry {
+                term: "serde_json".into(),
+                aliases: vec!["sir dee".into()],
+                matcher: ContextMatcher {
+                    browser_domain_contains: Some("docs.rs".into()),
+                    ..ContextMatcher::default()
+                },
+            },
+        ];
+        let policy = resolve_policy_context(
+            RewriteCorrectionPolicy::Balanced,
+            Some(&typing_context(RewriteSurfaceKind::Editor)),
+            &[RewriteCandidate {
+                kind: RewriteCandidateKind::Literal,
+                text: "sir dee".into(),
+            }],
+            &[],
+            &glossary,
+        );
+        assert_eq!(policy.glossary_candidates.len(), 1);
+        assert_eq!(policy.glossary_candidates[0].text, "serde_json");
     }
 
     #[test]
