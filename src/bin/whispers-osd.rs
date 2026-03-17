@@ -26,17 +26,13 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 const NUM_BARS: usize = 12;
 const BAR_WIDTH: u32 = 3;
 const BAR_GAP: u32 = 2;
-const PAD_X: u32 = 12;
-const PAD_Y: u32 = 6;
 const BAR_MIN_HEIGHT: f32 = 2.0;
 const BAR_MAX_HEIGHT: f32 = 20.0;
-const METER_WIDTH: u32 =
-    PAD_X * 2 + NUM_BARS as u32 * BAR_WIDTH + (NUM_BARS as u32 - 1) * BAR_GAP;
-const METER_HEIGHT: u32 = BAR_MAX_HEIGHT as u32 + PAD_Y * 2;
+const METER_WIDTH: u32 = 128;
+const METER_HEIGHT: u32 = 72;
 const VOICE_WIDTH: u32 = 760;
 const VOICE_HEIGHT: u32 = 248;
 const MARGIN_BOTTOM: i32 = 40;
-const CORNER_RADIUS: u32 = 16;
 const BORDER_WIDTH: u32 = 1;
 const RISE_RATE: f32 = 0.40;
 const DECAY_RATE: f32 = 0.92;
@@ -46,11 +42,25 @@ const FRAME_MS: i32 = 1000 / FPS;
 const BG_R: u8 = 15;
 const BG_G: u8 = 16;
 const BG_B: u8 = 24;
-const BG_A: u8 = 160;
+const BG_A: u8 = 212;
 const BORDER_R: u8 = 200;
 const BORDER_G: u8 = 215;
 const BORDER_B: u8 = 255;
-const BORDER_A: u8 = 22;
+const BORDER_A: u8 = 28;
+
+const PANEL_R: u8 = 22;
+const PANEL_G: u8 = 28;
+const PANEL_B: u8 = 39;
+const PANEL_A: u8 = 192;
+const PANEL_BORDER_A: u8 = 18;
+const TRACK_R: u8 = 28;
+const TRACK_G: u8 = 36;
+const TRACK_B: u8 = 50;
+const TRACK_A: u8 = 218;
+const HIGHLIGHT_A: u8 = 14;
+const SHADOW_R: u8 = 3;
+const SHADOW_G: u8 = 6;
+const SHADOW_B: u8 = 10;
 
 const BAR_REST_R: f32 = 0.863;
 const BAR_REST_G: f32 = 0.882;
@@ -67,7 +77,8 @@ const TEXT_UNSTABLE: (u8, u8, u8, u8) = (115, 235, 226, 240);
 const TEXT_REWRITE: (u8, u8, u8, u8) = (255, 208, 126, 220);
 const TEXT_REWRITE_PRIMARY: (u8, u8, u8, u8) = (255, 236, 205, 240);
 const TEXT_WARNING: (u8, u8, u8, u8) = (255, 153, 134, 235);
-const DIVIDER: (u8, u8, u8, u8) = (120, 150, 205, 42);
+const ACCENT_STATUS: (u8, u8, u8) = (109, 236, 196);
+const ACCENT_REWRITE: (u8, u8, u8) = (255, 208, 126);
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static OSD_FONT: OnceLock<Option<Font>> = OnceLock::new();
@@ -335,8 +346,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             voice_snapshot.as_ref(),
         );
 
-        if let Err(err) = present_frame(&mut state, &qh, &pool, &shm_file, &pixels, width, height)
-        {
+        if let Err(err) = present_frame(&mut state, &qh, &pool, &shm_file, &pixels, width, height) {
             eprintln!("frame dropped: {err}");
         }
     }
@@ -445,53 +455,72 @@ fn render_frame(
     w: u32,
     h: u32,
     bars: &BarState,
-    _time: f32,
+    time: f32,
     mode: OverlayMode,
     voice_state: Option<&VoiceOverlayState>,
 ) {
-    draw_rounded_rect(
-        pixels,
-        w,
-        h,
-        0,
-        0,
-        w,
-        h,
-        CORNER_RADIUS,
-        BG_R,
-        BG_G,
-        BG_B,
-        BG_A,
-    );
-    draw_rounded_border(
-        pixels,
-        w,
-        h,
-        CORNER_RADIUS,
-        BORDER_WIDTH,
-        BORDER_R,
-        BORDER_G,
-        BORDER_B,
-        BORDER_A,
-    );
-    for x in (CORNER_RADIUS + 2)..(w.saturating_sub(CORNER_RADIUS + 2)) {
-        set_pixel_blend(pixels, w, h, x, 1, 255, 255, 255, 12);
-    }
-
     match mode {
-        OverlayMode::Meter => render_meter_overlay(pixels, w, h, bars),
+        OverlayMode::Meter => render_meter_overlay(pixels, w, h, bars, time),
         OverlayMode::Voice => render_voice_overlay(
             pixels,
             w,
             h,
             bars,
+            time,
             voice_state.unwrap_or(&VoiceOverlayState::default()),
         ),
     }
 }
 
-fn render_meter_overlay(pixels: &mut [u8], w: u32, h: u32, bars: &BarState) {
-    render_meter_bars(pixels, w, h, bars, h / 2);
+fn render_meter_overlay(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, time: f32) {
+    let shell_x = 8;
+    let shell_y = 10;
+    let shell_w = w.saturating_sub(shell_x * 2);
+    let shell_h = h.saturating_sub(shell_y * 2 + 2);
+    let shell_radius = shell_h / 2;
+
+    draw_surface_shell(
+        pixels,
+        w,
+        h,
+        shell_x,
+        shell_y,
+        shell_w,
+        shell_h,
+        shell_radius,
+    );
+
+    let status_x = shell_x + 22;
+    let status_y = shell_y + shell_h / 2;
+    draw_status_dot(
+        pixels,
+        w,
+        h,
+        status_x as i32,
+        status_y as i32,
+        5,
+        10.0 + bars.smooth_rms * 14.0 + (time * 3.0).sin().abs() * 3.0,
+        ACCENT_STATUS,
+    );
+
+    let track_x = shell_x + 38;
+    let track_y = shell_y + 10;
+    let track_w = shell_w.saturating_sub(50);
+    let track_h = shell_h.saturating_sub(20);
+    draw_track_shell(
+        pixels,
+        w,
+        h,
+        track_x,
+        track_y,
+        track_w,
+        track_h,
+        track_h / 2,
+    );
+
+    let total_width = NUM_BARS as u32 * BAR_WIDTH + (NUM_BARS as u32 - 1) * BAR_GAP;
+    let start_x = track_x + track_w.saturating_sub(total_width) / 2;
+    render_meter_bars(pixels, w, h, bars, track_y + track_h / 2, start_x);
 }
 
 fn render_voice_overlay(
@@ -499,18 +528,38 @@ fn render_voice_overlay(
     w: u32,
     h: u32,
     bars: &BarState,
+    time: f32,
     voice: &VoiceOverlayState,
 ) {
-    let pad = 20i32;
-    let header_y = 16i32;
-    let transcript_y = 50i32;
+    let shell_x = 12u32;
+    let shell_y = 10u32;
+    let shell_w = w.saturating_sub(shell_x * 2);
+    let shell_h = h.saturating_sub(shell_y * 2 + 2);
+    let shell_radius = 24u32;
+    draw_surface_shell(
+        pixels,
+        w,
+        h,
+        shell_x,
+        shell_y,
+        shell_w,
+        shell_h,
+        shell_radius,
+    );
+
+    let pad = (shell_x + 18) as i32;
+    let header_y = shell_y as i32 + 16;
+    let transcript_panel_y = shell_y + 42;
+    let transcript_panel_h = 110u32;
+    let panel_radius = 18u32;
+    let transcript_y = transcript_panel_y as i32 + 18;
     let status_font = 16.0;
     let badge_font = 13.0;
     let transcript_font = 20.0;
     let footer_font = 14.0;
     let transcript_line_height = line_height(transcript_font) + 4;
     let footer_line_height = line_height(footer_font) + 2;
-    let transcript_width = w.saturating_sub((pad as u32) * 2);
+    let transcript_width = shell_w.saturating_sub(72);
     let raw_live_text = combined_voice_text(&voice.stable_text, &voice.unstable_text);
     let rewrite_available = voice
         .rewrite_preview
@@ -519,11 +568,28 @@ fn render_voice_overlay(
         .filter(|text| !text.is_empty());
 
     let status_label = status_label(voice.status);
+    let status_dot_x = shell_x as i32 + 24;
+    let status_dot_y = header_y + 8;
+    let status_color = match voice.status {
+        VoiceOsdStatus::Rewriting => ACCENT_REWRITE,
+        VoiceOsdStatus::Frozen => (255, 153, 134),
+        _ => ACCENT_STATUS,
+    };
+    draw_status_dot(
+        pixels,
+        w,
+        h,
+        status_dot_x,
+        status_dot_y,
+        5,
+        9.0 + bars.smooth_rms * 12.0 + (time * 2.4).sin().abs() * 3.0,
+        status_color,
+    );
     draw_text(
         pixels,
         w,
         h,
-        pad,
+        pad + 18,
         header_y,
         status_font,
         status_label,
@@ -535,13 +601,33 @@ fn render_voice_overlay(
     } else {
         "PREVIEW ONLY"
     };
-    let badge_width = text_width(badge_text, badge_font);
+    let badge_width = text_width(badge_text, badge_font) + 22;
+    let badge_height = 24u32;
+    let badge_x = shell_x + shell_w.saturating_sub(badge_width + 18);
+    let badge_y = shell_y + 13;
+    let badge_rgb = if voice.live_inject {
+        (TEXT_UNSTABLE.0, TEXT_UNSTABLE.1, TEXT_UNSTABLE.2)
+    } else {
+        (TEXT_MUTED.0, TEXT_MUTED.1, TEXT_MUTED.2)
+    };
+    draw_chip(
+        pixels,
+        w,
+        h,
+        badge_x,
+        badge_y,
+        badge_width,
+        badge_height,
+        badge_rgb.0,
+        badge_rgb.1,
+        badge_rgb.2,
+    );
     draw_text(
         pixels,
         w,
         h,
-        w.saturating_sub(pad as u32 + badge_width) as i32,
-        header_y,
+        badge_x as i32 + 11,
+        badge_y as i32 + 5,
         badge_font,
         badge_text,
         if voice.live_inject {
@@ -551,6 +637,17 @@ fn render_voice_overlay(
         },
     );
 
+    draw_panel_shell(
+        pixels,
+        w,
+        h,
+        shell_x + 18,
+        transcript_panel_y,
+        shell_w.saturating_sub(36),
+        transcript_panel_h,
+        panel_radius,
+    );
+
     if let Some(rewrite_text) = rewrite_available {
         let preview_label = "Live rewrite preview";
         draw_text(
@@ -558,7 +655,7 @@ fn render_voice_overlay(
             w,
             h,
             pad,
-            transcript_y - footer_line_height - 2,
+            transcript_y - footer_line_height - 4,
             footer_font,
             preview_label,
             TEXT_REWRITE,
@@ -622,18 +719,26 @@ fn render_voice_overlay(
         }
     }
 
-    let divider_y = h.saturating_sub(74);
-    for x in pad as u32..w.saturating_sub(pad as u32) {
-        set_pixel_blend(
-            pixels, w, h, x, divider_y, DIVIDER.0, DIVIDER.1, DIVIDER.2, DIVIDER.3,
-        );
-    }
+    let footer_panel_x = shell_x + 18;
+    let footer_panel_y = shell_y + shell_h.saturating_sub(74);
+    let footer_panel_w = shell_w.saturating_sub(36);
+    let footer_panel_h = 26u32;
+    draw_panel_shell(
+        pixels,
+        w,
+        h,
+        footer_panel_x,
+        footer_panel_y,
+        footer_panel_w,
+        footer_panel_h,
+        13,
+    );
 
     if voice.frozen {
         let warning_lines = wrap_text(
             "Focus changed. Live injection is frozen for this take.",
-            transcript_width,
-            2,
+            footer_panel_w.saturating_sub(24),
+            1,
             footer_font,
         );
         for (idx, line) in warning_lines.iter().enumerate() {
@@ -641,8 +746,8 @@ fn render_voice_overlay(
                 pixels,
                 w,
                 h,
-                pad,
-                divider_y as i32 + 10 + idx as i32 * footer_line_height,
+                footer_panel_x as i32 + 12,
+                footer_panel_y as i32 + 6 + idx as i32 * footer_line_height,
                 footer_font,
                 line,
                 TEXT_WARNING,
@@ -653,20 +758,25 @@ fn render_voice_overlay(
             pixels,
             w,
             h,
-            pad,
-            divider_y as i32 + 10,
+            footer_panel_x as i32 + 12,
+            footer_panel_y as i32 + 6,
             footer_font,
             "Raw live hypothesis",
             TEXT_MUTED,
         );
-        let raw_lines = wrap_text(&raw_live_text, transcript_width, 2, footer_font);
+        let raw_lines = wrap_text(
+            &raw_live_text,
+            footer_panel_w.saturating_sub(150),
+            1,
+            footer_font,
+        );
         for (idx, line) in raw_lines.iter().enumerate() {
             draw_text(
                 pixels,
                 w,
                 h,
-                pad,
-                divider_y as i32 + 10 + footer_line_height + idx as i32 * footer_line_height,
+                footer_panel_x as i32 + 132,
+                footer_panel_y as i32 + 6 + idx as i32 * footer_line_height,
                 footer_font,
                 line,
                 TEXT_MUTED,
@@ -674,10 +784,33 @@ fn render_voice_overlay(
         }
     }
 
-    render_voice_bars(pixels, w, h, bars, h.saturating_sub(24));
+    let track_x = shell_x + 18;
+    let track_y = shell_y + shell_h.saturating_sub(38);
+    let track_w = shell_w.saturating_sub(36);
+    let track_h = 14u32;
+    draw_track_shell(
+        pixels,
+        w,
+        h,
+        track_x,
+        track_y,
+        track_w,
+        track_h,
+        track_h / 2,
+    );
+    let total_width = NUM_BARS as u32 * BAR_WIDTH + (NUM_BARS as u32 - 1) * BAR_GAP;
+    let start_x = track_x + track_w.saturating_sub(total_width) / 2;
+    render_voice_bars(pixels, w, h, bars, track_y + track_h / 2, start_x);
 }
 
-fn render_meter_bars(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, center_y: u32) {
+fn render_meter_bars(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    bars: &BarState,
+    center_y: u32,
+    start_x: u32,
+) {
     let color_t = bars.smooth_rms.clamp(0.0, 1.0);
     let cr = (lerp(BAR_REST_R, BAR_PEAK_R, color_t) * 255.0) as u8;
     let cg = (lerp(BAR_REST_G, BAR_PEAK_G, color_t) * 255.0) as u8;
@@ -687,8 +820,6 @@ fn render_meter_bars(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, center_
     let glow_expand = 1 + (color_t * 2.0) as u32;
     let glow_alpha = (15.0 + color_t * 25.0) as u8;
 
-    let total_width = NUM_BARS as u32 * BAR_WIDTH + (NUM_BARS as u32 - 1) * BAR_GAP;
-    let start_x = w.saturating_sub(total_width) / 2;
     for i in 0..NUM_BARS {
         let bx = start_x + i as u32 * (BAR_WIDTH + BAR_GAP);
         let bar_h = bars.heights[i] as u32;
@@ -698,8 +829,8 @@ fn render_meter_bars(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, center_
         for gy in top_y.saturating_sub(glow_expand)
             ..=(top_y + bar_h + glow_expand).min(h.saturating_sub(1))
         {
-            for gx in
-                bx.saturating_sub(glow_expand)..=(bx + BAR_WIDTH + glow_expand).min(w.saturating_sub(1))
+            for gx in bx.saturating_sub(glow_expand)
+                ..=(bx + BAR_WIDTH + glow_expand).min(w.saturating_sub(1))
             {
                 set_pixel_blend(pixels, w, h, gx, gy, cr, cg, cb, glow_alpha);
             }
@@ -716,16 +847,14 @@ fn render_meter_bars(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, center_
     }
 }
 
-fn render_voice_bars(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, center_y: u32) {
-    const VOICE_BAR_LEFT_R: f32 = 0.0;
-    const VOICE_BAR_LEFT_G: f32 = 0.82;
-    const VOICE_BAR_LEFT_B: f32 = 0.75;
-    const VOICE_BAR_RIGHT_R: f32 = 0.65;
-    const VOICE_BAR_RIGHT_G: f32 = 0.35;
-    const VOICE_BAR_RIGHT_B: f32 = 1.0;
-
-    let total_width = NUM_BARS as u32 * BAR_WIDTH + (NUM_BARS as u32 - 1) * BAR_GAP;
-    let start_x = w.saturating_sub(total_width) / 2;
+fn render_voice_bars(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    bars: &BarState,
+    center_y: u32,
+    start_x: u32,
+) {
     for i in 0..NUM_BARS {
         let bx = start_x + i as u32 * (BAR_WIDTH + BAR_GAP);
         let bar_h = bars.heights[i] as u32;
@@ -733,16 +862,14 @@ fn render_voice_bars(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, center_
         let top_y = center_y.saturating_sub(half_h);
 
         let t = i as f32 / (NUM_BARS - 1) as f32;
-        let r = lerp(VOICE_BAR_LEFT_R, VOICE_BAR_RIGHT_R, t);
-        let g = lerp(VOICE_BAR_LEFT_G, VOICE_BAR_RIGHT_G, t);
-        let b = lerp(VOICE_BAR_LEFT_B, VOICE_BAR_RIGHT_B, t);
-        let cr = (r * 255.0) as u8;
-        let cg = (g * 255.0) as u8;
-        let cb = (b * 255.0) as u8;
+        let focus = 1.0 - ((t - 0.5).abs() * 1.6).clamp(0.0, 1.0);
+        let cr = lerp(130.0, ACCENT_STATUS.0 as f32, focus) as u8;
+        let cg = lerp(176.0, ACCENT_STATUS.1 as f32, focus) as u8;
+        let cb = lerp(224.0, 255.0, focus) as u8;
 
         for gy in top_y.saturating_sub(2)..=(top_y + bar_h + 2).min(h.saturating_sub(1)) {
             for gx in bx.saturating_sub(1)..=(bx + BAR_WIDTH).min(w.saturating_sub(1)) {
-                set_pixel_blend(pixels, w, h, gx, gy, cr, cg, cb, 25);
+                set_pixel_blend(pixels, w, h, gx, gy, cr, cg, cb, 22);
             }
         }
 
@@ -755,6 +882,215 @@ fn render_voice_bars(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, center_
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_surface_shell(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    x0: u32,
+    y0: u32,
+    rect_w: u32,
+    rect_h: u32,
+    radius: u32,
+) {
+    draw_shadow(pixels, w, h, x0, y0, rect_w, rect_h, radius);
+    draw_rounded_rect(
+        pixels, w, h, x0, y0, rect_w, rect_h, radius, BG_R, BG_G, BG_B, BG_A,
+    );
+    draw_rounded_border_rect(
+        pixels,
+        w,
+        h,
+        x0,
+        y0,
+        rect_w,
+        rect_h,
+        radius,
+        BORDER_WIDTH,
+        BORDER_R,
+        BORDER_G,
+        BORDER_B,
+        BORDER_A,
+    );
+    let highlight_y = y0 + 1;
+    for x in (x0 + radius / 2)..(x0 + rect_w).saturating_sub(radius / 2) {
+        set_pixel_blend(pixels, w, h, x, highlight_y, 255, 255, 255, HIGHLIGHT_A);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_panel_shell(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    x0: u32,
+    y0: u32,
+    rect_w: u32,
+    rect_h: u32,
+    radius: u32,
+) {
+    draw_rounded_rect(
+        pixels, w, h, x0, y0, rect_w, rect_h, radius, PANEL_R, PANEL_G, PANEL_B, PANEL_A,
+    );
+    draw_rounded_border_rect(
+        pixels,
+        w,
+        h,
+        x0,
+        y0,
+        rect_w,
+        rect_h,
+        radius,
+        BORDER_WIDTH,
+        BORDER_R,
+        BORDER_G,
+        BORDER_B,
+        PANEL_BORDER_A,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_track_shell(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    x0: u32,
+    y0: u32,
+    rect_w: u32,
+    rect_h: u32,
+    radius: u32,
+) {
+    draw_rounded_rect(
+        pixels, w, h, x0, y0, rect_w, rect_h, radius, TRACK_R, TRACK_G, TRACK_B, TRACK_A,
+    );
+    draw_rounded_border_rect(
+        pixels,
+        w,
+        h,
+        x0,
+        y0,
+        rect_w,
+        rect_h,
+        radius,
+        BORDER_WIDTH,
+        BORDER_R,
+        BORDER_G,
+        BORDER_B,
+        14,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_chip(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    x0: u32,
+    y0: u32,
+    rect_w: u32,
+    rect_h: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    draw_rounded_rect(
+        pixels,
+        w,
+        h,
+        x0,
+        y0,
+        rect_w,
+        rect_h,
+        rect_h / 2,
+        r,
+        g,
+        b,
+        26,
+    );
+    draw_rounded_border_rect(
+        pixels,
+        w,
+        h,
+        x0,
+        y0,
+        rect_w,
+        rect_h,
+        rect_h / 2,
+        BORDER_WIDTH,
+        r,
+        g,
+        b,
+        44,
+    );
+}
+
+fn draw_shadow(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    x0: u32,
+    y0: u32,
+    rect_w: u32,
+    rect_h: u32,
+    radius: u32,
+) {
+    for spread in (1..=7).rev() {
+        let alpha = 4 + (7 - spread) as u8 * 3;
+        draw_rounded_rect(
+            pixels,
+            w,
+            h,
+            x0.saturating_sub(spread),
+            y0 + spread / 2,
+            rect_w + spread * 2,
+            rect_h + spread,
+            radius + spread,
+            SHADOW_R,
+            SHADOW_G,
+            SHADOW_B,
+            alpha,
+        );
+    }
+}
+
+fn draw_status_dot(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    glow_radius: f32,
+    color: (u8, u8, u8),
+) {
+    draw_soft_circle(
+        pixels,
+        w,
+        h,
+        cx,
+        cy,
+        glow_radius.round() as i32,
+        color.0,
+        color.1,
+        color.2,
+        34,
+    );
+    draw_soft_circle(
+        pixels,
+        w,
+        h,
+        cx,
+        cy,
+        radius + 3,
+        color.0,
+        color.1,
+        color.2,
+        52,
+    );
+    draw_circle(pixels, w, h, cx, cy, radius, color.0, color.1, color.2, 255);
+    draw_circle(pixels, w, h, cx - 1, cy - 1, 2, 244, 255, 250, 190);
 }
 
 fn status_label(status: VoiceOsdStatus) -> &'static str {
@@ -1038,15 +1374,7 @@ fn draw_bitmap_char(
                     let py = y + (row_idx * scale as usize + sy as usize) as i32;
                     if px >= 0 && py >= 0 {
                         set_pixel_blend(
-                            pixels,
-                            w,
-                            h,
-                            px as u32,
-                            py as u32,
-                            color.0,
-                            color.1,
-                            color.2,
-                            color.3,
+                            pixels, w, h, px as u32, py as u32, color.0, color.1, color.2, color.3,
                         );
                     }
                 }
@@ -1099,17 +1427,7 @@ fn present_frame(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-fn set_pixel_blend(
-    pixels: &mut [u8],
-    w: u32,
-    h: u32,
-    x: u32,
-    y: u32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-) {
+fn set_pixel_blend(pixels: &mut [u8], w: u32, h: u32, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
     if x >= w || y >= h || a == 0 {
         return;
     }
@@ -1156,10 +1474,14 @@ fn draw_rounded_rect(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_rounded_border(
+fn draw_rounded_border_rect(
     pixels: &mut [u8],
     w: u32,
     h: u32,
+    x0: u32,
+    y0: u32,
+    rect_w: u32,
+    rect_h: u32,
     radius: u32,
     thickness: u32,
     r: u8,
@@ -1167,22 +1489,81 @@ fn draw_rounded_border(
     b: u8,
     a: u8,
 ) {
-    for y in 0..h {
-        for x in 0..w {
-            let inside_outer = is_inside_rounded_rect(x, y, w, h, radius);
-            let inside_inner = x >= thickness
-                && y >= thickness
-                && x < w - thickness
-                && y < h - thickness
+    for y in y0..y0 + rect_h {
+        for x in x0..x0 + rect_w {
+            let inside_outer = is_inside_rounded_rect(x - x0, y - y0, rect_w, rect_h, radius);
+            let inside_inner = x >= x0 + thickness
+                && y >= y0 + thickness
+                && x < x0 + rect_w - thickness
+                && y < y0 + rect_h - thickness
                 && is_inside_rounded_rect(
-                    x - thickness,
-                    y - thickness,
-                    w - 2 * thickness,
-                    h - 2 * thickness,
+                    x - x0 - thickness,
+                    y - y0 - thickness,
+                    rect_w - 2 * thickness,
+                    rect_h - 2 * thickness,
                     radius.saturating_sub(thickness),
                 );
             if inside_outer && !inside_inner {
                 set_pixel_blend(pixels, w, h, x, y, r, g, b, a);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_circle(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    if radius <= 0 {
+        return;
+    }
+    let radius_sq = radius * radius;
+    for y in (cy - radius)..=(cy + radius) {
+        for x in (cx - radius)..=(cx + radius) {
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= radius_sq && x >= 0 && y >= 0 {
+                set_pixel_blend(pixels, w, h, x as u32, y as u32, r, g, b, a);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_soft_circle(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    if radius <= 0 || a == 0 {
+        return;
+    }
+    let radius_sq = (radius * radius) as f32;
+    for y in (cy - radius)..=(cy + radius) {
+        for x in (cx - radius)..=(cx + radius) {
+            let dx = (x - cx) as f32;
+            let dy = (y - cy) as f32;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq <= radius_sq && x >= 0 && y >= 0 {
+                let falloff = 1.0 - (dist_sq.sqrt() / radius as f32);
+                let alpha = (a as f32 * falloff * falloff) as u8;
+                set_pixel_blend(pixels, w, h, x as u32, y as u32, r, g, b, alpha);
             }
         }
     }
