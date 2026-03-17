@@ -78,7 +78,6 @@ const TEXT_REWRITE: (u8, u8, u8, u8) = (255, 208, 126, 220);
 const TEXT_REWRITE_PRIMARY: (u8, u8, u8, u8) = (255, 236, 205, 240);
 const TEXT_WARNING: (u8, u8, u8, u8) = (255, 153, 134, 235);
 const ACCENT_STATUS: (u8, u8, u8) = (109, 236, 196);
-const ACCENT_REWRITE: (u8, u8, u8) = (255, 208, 126);
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static OSD_FONT: OnceLock<Option<Font>> = OnceLock::new();
@@ -341,7 +340,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             state.width,
             state.height,
             &bars,
-            time,
             mode,
             voice_snapshot.as_ref(),
         );
@@ -455,24 +453,22 @@ fn render_frame(
     w: u32,
     h: u32,
     bars: &BarState,
-    time: f32,
     mode: OverlayMode,
     voice_state: Option<&VoiceOverlayState>,
 ) {
     match mode {
-        OverlayMode::Meter => render_meter_overlay(pixels, w, h, bars, time),
+        OverlayMode::Meter => render_meter_overlay(pixels, w, h, bars),
         OverlayMode::Voice => render_voice_overlay(
             pixels,
             w,
             h,
             bars,
-            time,
             voice_state.unwrap_or(&VoiceOverlayState::default()),
         ),
     }
 }
 
-fn render_meter_overlay(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, time: f32) {
+fn render_meter_overlay(pixels: &mut [u8], w: u32, h: u32, bars: &BarState) {
     let shell_x = 8;
     let shell_y = 10;
     let shell_w = w.saturating_sub(shell_x * 2);
@@ -490,22 +486,9 @@ fn render_meter_overlay(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, time
         shell_radius,
     );
 
-    let status_x = shell_x + 22;
-    let status_y = shell_y + shell_h / 2;
-    draw_status_dot(
-        pixels,
-        w,
-        h,
-        status_x as i32,
-        status_y as i32,
-        5,
-        10.0 + bars.smooth_rms * 14.0 + (time * 3.0).sin().abs() * 3.0,
-        ACCENT_STATUS,
-    );
-
-    let track_x = shell_x + 38;
+    let track_x = shell_x + 14;
     let track_y = shell_y + 10;
-    let track_w = shell_w.saturating_sub(50);
+    let track_w = shell_w.saturating_sub(28);
     let track_h = shell_h.saturating_sub(20);
     draw_track_shell(
         pixels,
@@ -528,7 +511,6 @@ fn render_voice_overlay(
     w: u32,
     h: u32,
     bars: &BarState,
-    time: f32,
     voice: &VoiceOverlayState,
 ) {
     let shell_x = 12u32;
@@ -568,28 +550,11 @@ fn render_voice_overlay(
         .filter(|text| !text.is_empty());
 
     let status_label = status_label(voice.status);
-    let status_dot_x = shell_x as i32 + 24;
-    let status_dot_y = header_y + 8;
-    let status_color = match voice.status {
-        VoiceOsdStatus::Rewriting => ACCENT_REWRITE,
-        VoiceOsdStatus::Frozen => (255, 153, 134),
-        _ => ACCENT_STATUS,
-    };
-    draw_status_dot(
-        pixels,
-        w,
-        h,
-        status_dot_x,
-        status_dot_y,
-        5,
-        9.0 + bars.smooth_rms * 12.0 + (time * 2.4).sin().abs() * 3.0,
-        status_color,
-    );
     draw_text(
         pixels,
         w,
         h,
-        pad + 18,
+        pad,
         header_y,
         status_font,
         status_label,
@@ -1055,44 +1020,6 @@ fn draw_shadow(
     }
 }
 
-fn draw_status_dot(
-    pixels: &mut [u8],
-    w: u32,
-    h: u32,
-    cx: i32,
-    cy: i32,
-    radius: i32,
-    glow_radius: f32,
-    color: (u8, u8, u8),
-) {
-    draw_soft_circle(
-        pixels,
-        w,
-        h,
-        cx,
-        cy,
-        glow_radius.round() as i32,
-        color.0,
-        color.1,
-        color.2,
-        34,
-    );
-    draw_soft_circle(
-        pixels,
-        w,
-        h,
-        cx,
-        cy,
-        radius + 3,
-        color.0,
-        color.1,
-        color.2,
-        52,
-    );
-    draw_circle(pixels, w, h, cx, cy, radius, color.0, color.1, color.2, 255);
-    draw_circle(pixels, w, h, cx - 1, cy - 1, 2, 244, 255, 250, 190);
-}
-
 fn status_label(status: VoiceOsdStatus) -> &'static str {
     match status {
         VoiceOsdStatus::Listening => "Listening",
@@ -1505,65 +1432,6 @@ fn draw_rounded_border_rect(
                 );
             if inside_outer && !inside_inner {
                 set_pixel_blend(pixels, w, h, x, y, r, g, b, a);
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_circle(
-    pixels: &mut [u8],
-    w: u32,
-    h: u32,
-    cx: i32,
-    cy: i32,
-    radius: i32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-) {
-    if radius <= 0 {
-        return;
-    }
-    let radius_sq = radius * radius;
-    for y in (cy - radius)..=(cy + radius) {
-        for x in (cx - radius)..=(cx + radius) {
-            let dx = x - cx;
-            let dy = y - cy;
-            if dx * dx + dy * dy <= radius_sq && x >= 0 && y >= 0 {
-                set_pixel_blend(pixels, w, h, x as u32, y as u32, r, g, b, a);
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_soft_circle(
-    pixels: &mut [u8],
-    w: u32,
-    h: u32,
-    cx: i32,
-    cy: i32,
-    radius: i32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-) {
-    if radius <= 0 || a == 0 {
-        return;
-    }
-    let radius_sq = (radius * radius) as f32;
-    for y in (cy - radius)..=(cy + radius) {
-        for x in (cx - radius)..=(cx + radius) {
-            let dx = (x - cx) as f32;
-            let dy = (y - cy) as f32;
-            let dist_sq = dx * dx + dy * dy;
-            if dist_sq <= radius_sq && x >= 0 && y >= 0 {
-                let falloff = 1.0 - (dist_sq.sqrt() / radius as f32);
-                let alpha = (a as f32 * falloff * falloff) as u8;
-                set_pixel_blend(pixels, w, h, x as u32, y as u32, r, g, b, alpha);
             }
         }
     }
