@@ -1,5 +1,5 @@
-mod local;
 mod branding;
+mod local;
 mod output;
 mod prompt;
 mod rewrite_profile;

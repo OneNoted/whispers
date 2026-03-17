@@ -12,7 +12,9 @@ use llama_cpp_2::openai::OpenAIChatTemplateParams;
 use llama_cpp_2::sampling::LlamaSampler;
 
 use crate::output::sanitize_rewrite_output;
-use crate::prompt::{RewritePrompt, build_oaicompat_messages_json, build_prompt, effective_max_tokens};
+use crate::prompt::{
+    RewritePrompt, build_oaicompat_messages_json, build_prompt, effective_max_tokens,
+};
 use crate::rewrite_profile::ResolvedRewriteProfile;
 use crate::rewrite_protocol::RewriteTranscript;
 
