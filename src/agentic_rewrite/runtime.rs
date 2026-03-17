@@ -234,7 +234,15 @@ fn is_minor_term_normalization(candidate_word: &str, output_word: &str) -> bool 
     }
 
     let distance = levenshtein_distance(candidate_word, output_word);
-    distance > 0 && distance <= 3 && distance * 2 <= max_len + 1
+    if distance == 0 || distance > 3 {
+        return false;
+    }
+
+    if phonetic_skeleton(candidate_word) == phonetic_skeleton(output_word) {
+        return true;
+    }
+
+    distance * 2 <= max_len + 1
 }
 
 fn levenshtein_distance(left: &str, right: &str) -> usize {
@@ -258,6 +266,29 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
     }
 
     previous[right_chars.len()]
+}
+
+fn phonetic_skeleton(word: &str) -> String {
+    let mut chars = word
+        .chars()
+        .filter(|ch| is_word_char(*ch))
+        .flat_map(|ch| ch.to_lowercase());
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+
+    let mut skeleton = String::from(first);
+    let mut previous = first;
+    for ch in chars {
+        if matches!(ch, 'a' | 'e' | 'i' | 'o' | 'u' | 'w' | 'y') {
+            continue;
+        }
+        if ch != previous {
+            skeleton.push(ch);
+            previous = ch;
+        }
+    }
+    skeleton
 }
 
 fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
@@ -894,5 +925,11 @@ mod tests {
         transcript.policy_context.correction_policy = RewriteCorrectionPolicy::Conservative;
 
         assert!(!conservative_output_allowed(&transcript, "cargo clippy"));
+    }
+
+    #[test]
+    fn minor_term_normalization_uses_phonetic_skeleton_without_allowing_unrelated_words() {
+        assert!(is_minor_term_normalization("sui", "sway"));
+        assert!(!is_minor_term_normalization("cat", "dog"));
     }
 }
