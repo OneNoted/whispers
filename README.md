@@ -28,11 +28,11 @@ The two invocations communicate via PID file + `SIGUSR1` — no daemon, no IPC s
 - `agentic_rewrite` uses the same local/cloud rewrite backends as `advanced_local`, but adds app-aware policy rules, technical glossary guidance, and a stricter conservative acceptance guard
 
 The older heuristic cleanup path is still available as deprecated `legacy_basic` for existing configs that already use `[cleanup]`.
-The local rewrite path is managed by `whispers` itself through an internal helper binary installed alongside the main executable, so there is no separate tool or daemon to install manually.
+The local rewrite path is managed by `whispers` itself through an internal helper binary installed alongside the main executable when you build with `--features local-rewrite`, so there is no separate tool or daemon to install manually.
 When a rewrite mode is enabled with `rewrite.backend = "local"`, `whispers` keeps a hidden rewrite worker warm for a short idle window so repeated dictation is much faster without becoming a permanent background daemon.
 Managed rewrite models are the default path. If you point `rewrite.model_path` at your own GGUF, it should be a chat-capable model with an embedded template that `llama.cpp` can apply at runtime.
 Deterministic personalization rules apply in all modes: dictionary replacements and spoken snippets. Custom rewrite instructions apply to both rewrite modes, and `agentic_rewrite` can additionally load app rules and glossary entries from separate TOML files.
-Cloud ASR and cloud rewrite are both optional. Local remains the default.
+Cloud ASR and cloud rewrite are both optional. Local ASR remains the default, while local rewrite is available when you install with `--features local-rewrite`.
 
 For file transcription, `whispers transcribe --raw <file>` always prints the plain ASR transcript without any post-processing.
 
@@ -58,6 +58,12 @@ cargo install whispers
 # Enable CUDA acceleration explicitly
 cargo install whispers --features cuda
 
+# Enable local rewrite support
+cargo install whispers --features local-rewrite
+
+# Enable CUDA + local rewrite support
+cargo install whispers --features cuda,local-rewrite
+
 # Build without the OSD overlay
 cargo install whispers --no-default-features
 ```
@@ -70,6 +76,12 @@ cargo install --git https://github.com/OneNoted/whispers
 
 # Enable CUDA acceleration explicitly
 cargo install --git https://github.com/OneNoted/whispers --features cuda
+
+# Enable local rewrite support
+cargo install --git https://github.com/OneNoted/whispers --features local-rewrite
+
+# Enable CUDA + local rewrite support
+cargo install --git https://github.com/OneNoted/whispers --features cuda,local-rewrite
 
 # Build without the OSD overlay
 cargo install --git https://github.com/OneNoted/whispers --no-default-features
@@ -125,7 +137,17 @@ whispers glossary path
 whispers glossary add TypeScript --alias "type script" --surface-kind editor
 ```
 
-That still remains a single install: `whispers` manages local ASR models, the optional local rewrite worker/model, and the optional cloud configuration from the same package. `faster-whisper` is bootstrapped into a hidden managed runtime when you download or prewarm that backend.
+That still remains a single install: `whispers` manages local ASR models, the optional local rewrite worker/model, and the optional cloud configuration from the same package. If you enable `--features local-rewrite`, the helper worker is installed alongside `whispers` automatically. `faster-whisper` is bootstrapped into a hidden managed runtime when you download or prewarm that backend.
+
+### Source builds
+
+Source builds in this repo use bundled `whisper-rs-sys` bindings by default, so normal `cargo build`, `cargo test`, and `cargo install` runs do not need any extra environment variables.
+
+Maintainers can force a bindgen refresh intentionally with:
+
+```sh
+WHISPER_FORCE_GENERATE_BINDINGS=1 cargo build
+```
 
 ## Shell completions
 
