@@ -61,8 +61,8 @@ jobs:
       - name: Check local rewrite feature only
         run: cargo check --no-default-features --features local-rewrite
 
-      - name: Package tarball (repo-local publish surface)
-        run: cargo package --locked --no-verify
+      - name: Package tarball
+        run: cargo package --locked
 
       - name: Check cuda feature only (if toolkit available)
         run: |

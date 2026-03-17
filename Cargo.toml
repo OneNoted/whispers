@@ -97,6 +97,3 @@ required-features = ["local-rewrite"]
 
 [dev-dependencies]
 httpmock = "0.7"
-
-[patch.crates-io]
-whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
