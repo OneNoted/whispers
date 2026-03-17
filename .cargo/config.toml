@@ -1,0 +1,5 @@
+[env]
+WHISPER_DONT_GENERATE_BINDINGS = "1"
+
+[patch.crates-io]
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }

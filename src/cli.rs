@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::rewrite_protocol::{RewriteCorrectionPolicy, RewriteSurfaceKind};
+
 #[derive(Parser, Debug)]
 #[command(
     name = "whispers",
@@ -70,6 +72,18 @@ pub enum Command {
     Dictionary {
         #[command(subcommand)]
         action: DictionaryAction,
+    },
+
+    /// Manage app-aware rewrite policy rules
+    AppRule {
+        #[command(subcommand)]
+        action: AppRuleAction,
+    },
+
+    /// Manage technical glossary entries for agentic rewrite
+    Glossary {
+        #[command(subcommand)]
+        action: GlossaryAction,
     },
 
     /// Check optional cloud ASR/rewrite configuration and connectivity
@@ -170,6 +184,91 @@ pub enum DictionaryAction {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum AppRuleAction {
+    /// Print the configured app rule file path
+    Path,
+
+    /// List configured app rules
+    List,
+
+    /// Add or update an app rule
+    Add {
+        /// Stable rule name used for updates and removals
+        name: String,
+
+        /// Instructions appended to the effective rewrite prompt
+        instructions: String,
+
+        /// Match on the active surface kind
+        #[arg(long)]
+        surface_kind: Option<RewriteSurfaceKind>,
+
+        /// Match on the exact app ID
+        #[arg(long)]
+        app_id: Option<String>,
+
+        /// Case-insensitive substring match on the window title
+        #[arg(long)]
+        window_title_contains: Option<String>,
+
+        /// Case-insensitive substring match on the browser domain
+        #[arg(long)]
+        browser_domain_contains: Option<String>,
+
+        /// Override the effective correction policy
+        #[arg(long)]
+        correction_policy: Option<RewriteCorrectionPolicy>,
+    },
+
+    /// Remove an app rule by name
+    Remove {
+        /// Rule name to remove
+        name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum GlossaryAction {
+    /// Print the configured glossary file path
+    Path,
+
+    /// List configured glossary entries
+    List,
+
+    /// Add or update a glossary entry
+    Add {
+        /// Canonical output term
+        term: String,
+
+        /// Alias that should map to the canonical term
+        #[arg(long = "alias", required = true)]
+        aliases: Vec<String>,
+
+        /// Match on the active surface kind
+        #[arg(long)]
+        surface_kind: Option<RewriteSurfaceKind>,
+
+        /// Match on the exact app ID
+        #[arg(long)]
+        app_id: Option<String>,
+
+        /// Case-insensitive substring match on the window title
+        #[arg(long)]
+        window_title_contains: Option<String>,
+
+        /// Case-insensitive substring match on the browser domain
+        #[arg(long)]
+        browser_domain_contains: Option<String>,
+    },
+
+    /// Remove a glossary entry by canonical term
+    Remove {
+        /// Canonical term to remove
+        term: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum SnippetAction {
     /// List snippets
     List,
@@ -264,6 +363,49 @@ mod tests {
             cli.command,
             Some(Command::Dictionary {
                 action: DictionaryAction::Add { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_app_rule_add_subcommand() {
+        let cli = Cli::try_parse_from([
+            "whispers",
+            "app-rule",
+            "add",
+            "zed",
+            "Preserve identifiers.",
+            "--app-id",
+            "dev.zed.Zed",
+            "--correction-policy",
+            "balanced",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::AppRule {
+                action: AppRuleAction::Add { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_glossary_add_subcommand() {
+        let cli = Cli::try_parse_from([
+            "whispers",
+            "glossary",
+            "add",
+            "TypeScript",
+            "--alias",
+            "type script",
+            "--surface-kind",
+            "editor",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Glossary {
+                action: GlossaryAction::Add { .. }
             })
         ));
     }

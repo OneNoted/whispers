@@ -58,13 +58,17 @@ jobs:
       - name: Check osd feature only
         run: cargo check --no-default-features --features osd
 
-      - name: Verify package (default publish surface)
+      - name: Check local rewrite feature only
+        run: cargo check --no-default-features --features local-rewrite
+
+      - name: Package tarball
         run: cargo package --locked
 
       - name: Check cuda feature only (if toolkit available)
         run: |
           if command -v nvcc >/dev/null 2>&1; then
             cargo check --no-default-features --features cuda
+            cargo check --no-default-features --features cuda,local-rewrite
           else
             echo "CUDA toolkit not available on this runner; skipping cuda feature check"
           fi

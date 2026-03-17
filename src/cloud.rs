@@ -13,7 +13,10 @@ use crate::config::{
 };
 use crate::error::{Result, WhsprError};
 use crate::personalization;
-use crate::rewrite_profile::{ResolvedRewriteProfile, RewriteProfile};
+use crate::rewrite::{
+    RewritePrompt, build_prompt as build_rewrite_prompt, resolved_profile_for_cloud,
+    sanitize_rewrite_output,
+};
 use crate::rewrite_protocol::RewriteTranscript;
 use crate::transcribe::{Transcript, TranscriptSegment};
 
@@ -160,7 +163,9 @@ impl CloudService {
         custom_instructions: Option<&str>,
     ) -> Result<String> {
         let started = Instant::now();
-        let prompt = build_cloud_rewrite_prompt(config, transcript, custom_instructions);
+        let profile = resolved_profile_for_cloud(config.rewrite.profile);
+        let prompt = build_rewrite_prompt(transcript, profile, custom_instructions)
+            .map_err(|e| WhsprError::Rewrite(format!("failed to build rewrite prompt: {e}")))?;
         let url = format!("{}/chat/completions", self.base_url);
         let request = ChatCompletionsRequest::from_prompt(config, &prompt);
         let request_started = Instant::now();
@@ -211,9 +216,8 @@ impl CloudService {
 
 pub fn validate_config(config: &Config) -> Result<()> {
     let uses_cloud_asr = config.transcription.backend == TranscriptionBackend::Cloud;
-    let uses_cloud_rewrite = config.postprocess.mode
-        == crate::config::PostprocessMode::AdvancedLocal
-        && config.rewrite.backend == RewriteBackend::Cloud;
+    let uses_cloud_rewrite =
+        config.postprocess.mode.uses_rewrite() && config.rewrite.backend == RewriteBackend::Cloud;
     if !uses_cloud_asr && !uses_cloud_rewrite {
         return Ok(());
     }
@@ -453,144 +457,12 @@ fn samples_to_ms(sample_count: usize, sample_rate: u32) -> u32 {
     ((sample_count as f64 / sample_rate as f64) * 1000.0).round() as u32
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RewritePrompt {
-    system: String,
-    user: String,
-}
-
 #[derive(serde::Serialize)]
 struct ChatCompletionsRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
     max_tokens: usize,
-}
-
-fn build_cloud_rewrite_prompt(
-    config: &Config,
-    transcript: &RewriteTranscript,
-    custom_instructions: Option<&str>,
-) -> RewritePrompt {
-    let profile = resolved_profile_for_cloud(config.rewrite.profile);
-    let system = build_system_instructions(profile, custom_instructions);
-    let language = transcript.detected_language.as_deref().unwrap_or("unknown");
-    let correction_aware = transcript.correction_aware_text.trim();
-    let raw = transcript.raw_text.trim();
-    let recommended = transcript
-        .recommended_session_candidate
-        .as_ref()
-        .map(|candidate| candidate.text.as_str())
-        .or_else(|| {
-            transcript
-                .recommended_candidate
-                .as_ref()
-                .map(|candidate| candidate.text.as_str())
-        })
-        .unwrap_or("");
-    let candidates = if transcript.rewrite_candidates.is_empty() {
-        "- none\n".to_string()
-    } else {
-        transcript
-            .rewrite_candidates
-            .iter()
-            .map(|candidate| format!("- {}\n", candidate.text))
-            .collect::<String>()
-    };
-    let user = format!(
-        "Language: {language}\n\
-Correction-aware transcript:\n{correction_aware}\n\
-Raw transcript:\n{raw}\n\
-Recommended interpretation:\n{recommended}\n\
-Candidate interpretations:\n{candidates}\
-Final text:"
-    );
-    RewritePrompt { system, user }
-}
-
-fn build_system_instructions(
-    profile: ResolvedRewriteProfile,
-    custom_instructions: Option<&str>,
-) -> String {
-    let mut instructions = rewrite_instructions(profile).to_string();
-    if let Some(custom) = custom_instructions
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-    {
-        instructions.push_str("\n\nAdditional user rewrite instructions:\n");
-        instructions.push_str(custom);
-    }
-    instructions
-}
-
-fn rewrite_instructions(profile: ResolvedRewriteProfile) -> &'static str {
-    let base = "You clean up dictated speech into the final text the user meant to type. Return only the finished text. Do not explain anything. Remove obvious disfluencies when natural. Use the correction-aware transcript as the primary source of truth unless structured edit cues still make the utterance ambiguous. Never reintroduce text that was removed by an explicit spoken correction cue. Respect any recommended interpretation and candidate interpretations provided alongside the transcript. Prefer transcript spellings for names, brands, and uncommon proper nouns unless a user dictionary or explicit correction says otherwise. Do not normalize names into more common spellings just because they look familiar.";
-    match profile {
-        ResolvedRewriteProfile::Qwen => {
-            "You clean up dictated speech into the final text the user meant to type. Return only the finished text. Do not explain anything. Do not emit reasoning, think tags, or XML wrappers. Remove obvious disfluencies when natural. Use the correction-aware transcript as the primary source of truth unless structured edit cues still make the utterance ambiguous. Never reintroduce text that was removed by an explicit spoken correction cue. Respect any recommended interpretation and candidate interpretations provided alongside the transcript. Prefer transcript spellings for names, brands, and uncommon proper nouns unless a user dictionary or explicit correction says otherwise. Do not normalize names into more common spellings just because they look familiar."
-        }
-        ResolvedRewriteProfile::Generic | ResolvedRewriteProfile::LlamaCompat => base,
-    }
-}
-
-fn resolved_profile_for_cloud(profile: RewriteProfile) -> ResolvedRewriteProfile {
-    match profile {
-        RewriteProfile::Auto => ResolvedRewriteProfile::Generic,
-        RewriteProfile::Generic => ResolvedRewriteProfile::Generic,
-        RewriteProfile::Qwen => ResolvedRewriteProfile::Qwen,
-        RewriteProfile::LlamaCompat => ResolvedRewriteProfile::LlamaCompat,
-    }
-}
-
-fn sanitize_rewrite_output(raw: &str) -> String {
-    let mut text = raw.replace("\r\n", "\n");
-
-    for stop in ["<|eot_id|>", "<|end_of_text|>", "</s>"] {
-        if let Some(index) = text.find(stop) {
-            text.truncate(index);
-        }
-    }
-    if let Some(index) = text.find("</output>") {
-        text.truncate(index);
-    }
-
-    text = strip_tagged_section(&text, "<think>", "</think>");
-    let mut text = text.trim().to_string();
-
-    if let Some(stripped) = text.strip_prefix("<output>") {
-        text = stripped.trim().to_string();
-    }
-    for prefix in ["Final text:", "Output:", "Rewritten text:"] {
-        if text
-            .get(..prefix.len())
-            .map(|candidate| candidate.eq_ignore_ascii_case(prefix))
-            .unwrap_or(false)
-        {
-            text = text[prefix.len()..].trim().to_string();
-            break;
-        }
-    }
-    if text.starts_with('"') && text.ends_with('"') && text.len() >= 2 {
-        text = text[1..text.len() - 1].trim().to_string();
-    }
-    text
-}
-
-fn strip_tagged_section(input: &str, open: &str, close: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut remainder = input;
-    while let Some(start) = remainder.find(open) {
-        result.push_str(&remainder[..start]);
-        let after_open = &remainder[start + open.len()..];
-        if let Some(end) = after_open.find(close) {
-            remainder = &after_open[end + close.len()..];
-        } else {
-            remainder = "";
-            break;
-        }
-    }
-    result.push_str(remainder);
-    result
 }
 
 impl ChatCompletionsRequest {
@@ -829,6 +701,7 @@ mod tests {
                     edit_hypotheses: Vec::new(),
                     rewrite_candidates: Vec::new(),
                     recommended_candidate: None,
+                    policy_context: crate::rewrite_protocol::RewritePolicyContext::default(),
                 },
                 None,
             )

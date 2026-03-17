@@ -1,6 +1,6 @@
 [package]
 name = "whispers"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Speech-to-text dictation tool for Wayland"
@@ -8,7 +8,18 @@ license = "MPL-2.0"
 repository = "https://github.com/OneNoted/whispers"
 keywords = ["wayland", "speech-to-text", "whisper", "dictation", "voice"]
 categories = ["accessibility", "multimedia"]
-exclude = [".jj/", ".git/", "target/"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "config.example.toml",
+    ".cargo/config.toml",
+    "sounds/*.wav",
+    "src/**",
+    "vendor/whisper-rs-sys/**/*",
+]
 
 [dependencies]
 # Async runtime
@@ -19,7 +30,7 @@ cpal = "0.17"
 
 # Whisper transcription
 whisper-rs = "0.15"
-llama-cpp-2 = "0.1.138"
+llama-cpp-2 = { version = "0.1.138", optional = true }
 
 # uinput virtual keyboard for paste keystroke
 evdev = { version = "0.13" }
@@ -63,11 +74,20 @@ console = "0.16"
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client"], optional = true }
 wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+font8x8 = { version = "0.3", optional = true }
+fontdue = { version = "0.9", optional = true }
 
 [features]
 default = ["osd"]
-cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
-osd = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-protocols-wlr"]
+cuda = ["whisper-rs/cuda", "llama-cpp-2?/cuda"]
+local-rewrite = ["dep:llama-cpp-2"]
+osd = [
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:wayland-protocols-wlr",
+    "dep:font8x8",
+    "dep:fontdue",
+]
 
 [[bin]]
 name = "whispers"
@@ -80,7 +100,8 @@ required-features = ["osd"]
 
 [[bin]]
 name = "whispers-rewrite-worker"
-path = "src/bin/whispers-rewrite-worker.rs"
+path = "src/bin/whispers-rewrite-worker/main.rs"
+required-features = ["local-rewrite"]
 
 [dev-dependencies]
 httpmock = "0.7"

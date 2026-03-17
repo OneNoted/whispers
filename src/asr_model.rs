@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::{
-    self, TranscriptionBackend, resolve_config_path, update_config_transcription_selection,
-};
+use crate::config::{TranscriptionBackend, update_config_transcription_selection};
 use crate::error::{Result, WhsprError};
+use crate::model_support;
 use crate::{faster_whisper, model, nemo_asr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,11 +257,7 @@ pub fn selected_model_path(name: &str) -> Option<PathBuf> {
 fn active_model_name(
     config_path_override: Option<&Path>,
 ) -> Option<(TranscriptionBackend, String)> {
-    let config_path = resolve_config_path(config_path_override);
-    if !config_path.exists() {
-        return None;
-    }
-    let config = config::Config::load(Some(&config_path)).ok()?;
+    let config = model_support::load_config_if_exists(config_path_override)?;
     Some((
         config.transcription.resolved_local_backend(),
         config.transcription.selected_model,
@@ -285,12 +280,7 @@ fn model_status(info: &AsrModelInfo, active: Option<(TranscriptionBackend, &str)
         })
         .unwrap_or(false);
 
-    match (is_active, is_local) {
-        (true, true) => "active",
-        (true, false) => "active (missing)",
-        (_, true) => "local",
-        _ => "remote",
-    }
+    model_support::managed_download_status(is_active, is_local)
 }
 
 pub fn list_models(config_path_override: Option<&Path>) {
@@ -387,13 +377,10 @@ pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<(
         )));
     }
 
-    let config_path = resolve_config_path(config_path_override);
-    if !config_path.exists() {
-        config::write_default_config(
-            &config_path,
-            &model::model_path_for_config("ggml-large-v3-turbo.bin"),
-        )?;
-    }
+    let (config_path, _) = model_support::ensure_default_config(
+        config_path_override,
+        &model::model_path_for_config("ggml-large-v3-turbo.bin"),
+    )?;
 
     let config_model_path = match info.backend {
         TranscriptionBackend::WhisperCpp => model::model_path_for_config(
@@ -410,7 +397,7 @@ pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<(
         info.backend,
         info.name,
         &config_model_path,
-        config::Config::load(Some(&config_path))
+        model_support::load_config_at_if_exists(&config_path)
             .map(|config| config.transcription.backend != TranscriptionBackend::Cloud)
             .unwrap_or(true),
     )?;

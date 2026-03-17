@@ -119,13 +119,14 @@ fn parse_niri_focused_window_json(raw: &str, captured_at_ms: u64) -> Option<Typi
     };
 
     let surface_kind = classify_surface_kind(app_id.as_deref(), window_title.as_deref());
+    let browser_domain = infer_browser_domain(surface_kind, window_title.as_deref());
 
     Some(TypingContext {
         focus_fingerprint,
         app_id,
         window_title,
         surface_kind,
-        browser_domain: None,
+        browser_domain,
         captured_at_ms,
     })
 }
@@ -155,13 +156,14 @@ fn parse_hyprland_activewindow_json(raw: &str, captured_at_ms: u64) -> Option<Ty
     };
 
     let surface_kind = classify_surface_kind(app_id.as_deref(), window_title.as_deref());
+    let browser_domain = infer_browser_domain(surface_kind, window_title.as_deref());
 
     Some(TypingContext {
         focus_fingerprint,
         app_id,
         window_title,
         surface_kind,
-        browser_domain: None,
+        browser_domain,
         captured_at_ms,
     })
 }
@@ -228,6 +230,91 @@ fn json_string(value: &Value, key: &str) -> Option<String> {
     value.get(key)?.as_str().map(str::to_string)
 }
 
+fn infer_browser_domain(surface_kind: SurfaceKind, window_title: Option<&str>) -> Option<String> {
+    if surface_kind != SurfaceKind::Browser {
+        return None;
+    }
+
+    let title = window_title?;
+    extract_browser_domain_from_title(title)
+}
+
+fn extract_browser_domain_from_title(title: &str) -> Option<String> {
+    let normalized = title
+        .replace(" — ", "\n")
+        .replace(" – ", "\n")
+        .replace(" - ", "\n")
+        .replace(" | ", "\n")
+        .replace(" · ", "\n");
+
+    for segment in normalized.lines() {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+
+        if let Some(domain) = extract_domain_candidate(segment) {
+            return Some(domain);
+        }
+
+        for token in segment.split_whitespace() {
+            if let Some(domain) = extract_domain_candidate(token) {
+                return Some(domain);
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_domain_candidate(candidate: &str) -> Option<String> {
+    let trimmed = candidate.trim_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',')
+    });
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_scheme = trimmed.split("://").nth(1).unwrap_or(trimmed);
+    let host = without_scheme
+        .split('/')
+        .next()
+        .unwrap_or(without_scheme)
+        .split(':')
+        .next()
+        .unwrap_or(without_scheme)
+        .trim_end_matches('.');
+
+    looks_like_domain(host).then(|| host.to_ascii_lowercase())
+}
+
+fn looks_like_domain(host: &str) -> bool {
+    let mut labels = host.split('.');
+    let Some(first) = labels.next() else {
+        return false;
+    };
+    if first.is_empty() || !is_domain_label(first) {
+        return false;
+    }
+
+    let rest = labels.collect::<Vec<_>>();
+    if rest.is_empty() {
+        return false;
+    }
+
+    rest.iter().all(|label| is_domain_label(label))
+        && rest
+            .last()
+            .is_some_and(|label| label.chars().any(|ch| ch.is_ascii_alphabetic()))
+}
+
+fn is_domain_label(label: &str) -> bool {
+    !label.is_empty()
+        && label
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -287,5 +374,34 @@ mod tests {
     fn parse_hyprland_activewindow_json_returns_none_for_empty_payload() {
         let raw = r#"{"mapped": true}"#;
         assert!(parse_hyprland_activewindow_json(raw, 1).is_none());
+    }
+
+    #[test]
+    fn parse_niri_focused_window_json_extracts_browser_domain_from_title() {
+        let raw = r#"{
+            "id": 11,
+            "title": "docs.rs - serde_json",
+            "app_id": "firefox"
+        }"#;
+
+        let context = parse_niri_focused_window_json(raw, 42).expect("context");
+        assert_eq!(context.surface_kind, SurfaceKind::Browser);
+        assert_eq!(context.browser_domain.as_deref(), Some("docs.rs"));
+    }
+
+    #[test]
+    fn parse_hyprland_activewindow_json_extracts_browser_domain_from_title() {
+        let raw = r#"{
+            "address": "0x5678",
+            "class": "firefox",
+            "title": "https://news.ycombinator.com/item?id=1"
+        }"#;
+
+        let context = parse_hyprland_activewindow_json(raw, 42).expect("context");
+        assert_eq!(context.surface_kind, SurfaceKind::Browser);
+        assert_eq!(
+            context.browser_domain.as_deref(),
+            Some("news.ycombinator.com")
+        );
     }
 }

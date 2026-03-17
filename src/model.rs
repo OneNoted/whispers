@@ -1,13 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use futures_util::StreamExt;
-use tokio::io::AsyncWriteExt;
-
-use crate::config::{
-    self, TranscriptionBackend, data_dir, resolve_config_path,
-    update_config_transcription_selection,
-};
+use crate::config::{self, TranscriptionBackend, data_dir, update_config_transcription_selection};
 use crate::error::{Result, WhsprError};
+use crate::model_support;
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
@@ -105,41 +100,21 @@ pub fn selected_model_local_path(name: &str) -> Option<PathBuf> {
     find_model(name).map(|info| model_path(info.filename))
 }
 
-fn path_for_config(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
-    if let Some(home_path) = home {
-        if let Ok(stripped) = path.strip_prefix(home_path) {
-            return format!("~/{}", stripped.display());
-        }
-    }
-    path.display().to_string()
-}
-
 pub fn model_path_for_config(filename: &str) -> String {
     let path = model_path(filename);
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
-    path_for_config(&path, home.as_deref())
+    model_support::path_for_current_home(&path)
 }
 
 fn active_model_path(config_path_override: Option<&Path>) -> Option<String> {
-    let config_path = resolve_config_path(config_path_override);
-    if !config_path.exists() {
-        return None;
-    }
-    let contents = std::fs::read_to_string(&config_path).ok()?;
-    let config: config::Config = toml::from_str(&contents).ok()?;
-    Some(config.transcription.model_path)
+    model_support::load_config_if_exists(config_path_override)
+        .map(|config| config.transcription.model_path)
 }
 
 fn model_status(info: &ModelInfo, active_resolved: Option<&std::path::Path>) -> &'static str {
     let path = model_path(info.filename);
     let is_active = active_resolved == Some(path.as_path());
     let is_local = path.exists();
-
-    match (is_active, is_local) {
-        (true, _) => "active",
-        (_, true) => "local",
-        _ => "remote",
-    }
+    model_support::configured_file_status(is_active, is_local)
 }
 
 pub fn list_models(config_path_override: Option<&Path>) {
@@ -164,26 +139,6 @@ pub fn list_models(config_path_override: Option<&Path>) {
     }
 }
 
-fn validated_existing_len(existing_len: u64, status: reqwest::StatusCode) -> Result<u64> {
-    if existing_len > 0 {
-        match status {
-            reqwest::StatusCode::PARTIAL_CONTENT => Ok(existing_len),
-            reqwest::StatusCode::OK => Ok(0),
-            _ => Err(WhsprError::Download(format!(
-                "download failed with HTTP {}",
-                status
-            ))),
-        }
-    } else if status.is_success() {
-        Ok(0)
-    } else {
-        Err(WhsprError::Download(format!(
-            "download failed with HTTP {}",
-            status
-        )))
-    }
-}
-
 pub async fn download_model(name: &str) -> Result<PathBuf> {
     download_model_from_base(name, MODEL_BASE_URL).await
 }
@@ -201,109 +156,19 @@ pub(crate) async fn download_model_from_base(name: &str, base_url: &str) -> Resu
     let dest = model_path(info.filename);
     let part_path = dest.with_extension("bin.part");
 
-    if dest.exists() {
-        tracing::info!("model '{name}' already downloaded at {}", dest.display());
-        println!("{}", crate::ui::ready_message("ASR", name));
-        return Ok(dest);
-    }
-
-    // Ensure data directory exists
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| WhsprError::Download(format!("failed to create data directory: {e}")))?;
-    }
-
     let url = format!("{}/{}", base_url.trim_end_matches('/'), info.filename);
-    tracing::info!("downloading model '{}' from {}", info.name, url);
-
-    println!(
-        "{} Downloading ASR model {} ({})...",
-        crate::ui::info_label(),
-        crate::ui::value(info.name),
-        info.size
-    );
-
-    let client = reqwest::Client::new();
-
-    // Check for partial download to support resume
-    let mut existing_len = if part_path.exists() {
-        std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
-
-    let mut request = client.get(&url);
-    if existing_len > 0 {
-        tracing::info!("resuming model download from {existing_len} bytes");
-        if crate::ui::is_verbose() {
-            println!("Resuming from {} bytes...", existing_len);
-        }
-        request = request.header("Range", format!("bytes={}-", existing_len));
-    }
-
-    let response = request
-        .send()
-        .await
-        .map_err(|e| WhsprError::Download(format!("failed to start download: {e}")))?;
-
-    let original_len = existing_len;
-    existing_len = validated_existing_len(existing_len, response.status())?;
-    if original_len > 0 && existing_len == 0 {
-        tracing::warn!("server ignored range request, restarting model download from zero");
-        if crate::ui::is_verbose() {
-            println!("Server ignored range request, restarting download from zero");
-        }
-    }
-
-    let total_size = if existing_len > 0 {
-        // For range requests, content-length is remaining bytes
-        response
-            .content_length()
-            .map(|cl| cl + existing_len)
-            .unwrap_or(0)
-    } else {
-        response.content_length().unwrap_or(0)
-    };
-
-    let pb = crate::ui::progress_bar(total_size);
-    pb.set_position(existing_len);
-
-    let mut open_opts = tokio::fs::OpenOptions::new();
-    open_opts.create(true);
-    if existing_len > 0 {
-        open_opts.append(true);
-    } else {
-        open_opts.write(true).truncate(true);
-    }
-    let mut file = open_opts
-        .open(&part_path)
-        .await
-        .map_err(|e| WhsprError::Download(format!("failed to open file: {e}")))?;
-
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| WhsprError::Download(format!("download interrupted: {e}")))?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| WhsprError::Download(format!("failed to write: {e}")))?;
-        pb.inc(chunk.len() as u64);
-    }
-
-    file.flush()
-        .await
-        .map_err(|e| WhsprError::Download(format!("failed to flush: {e}")))?;
-    drop(file);
-
-    pb.finish_with_message("done");
-
-    // Atomic rename
-    std::fs::rename(&part_path, &dest)
-        .map_err(|e| WhsprError::Download(format!("failed to finalize download: {e}")))?;
-
-    tracing::info!("model '{}' saved to {}", info.name, dest.display());
-    println!("{}", crate::ui::ready_message("ASR", info.name));
-    Ok(dest)
+    model_support::download_to_path(model_support::DownloadSpec {
+        tracing_label: "model",
+        user_label: "ASR model",
+        ready_kind: "ASR",
+        item_name: info.name,
+        size: info.size,
+        url: &url,
+        dest,
+        part_path,
+        resume_partial: true,
+    })
+    .await
 }
 
 pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<()> {
@@ -318,10 +183,11 @@ pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<(
         )));
     }
 
-    let config_path = resolve_config_path(config_path_override);
     let model_path_str = model_path_for_config(info.filename);
+    let (config_path, created) =
+        model_support::ensure_default_config(config_path_override, &model_path_str)?;
 
-    if config_path.exists() {
+    if !created {
         tracing::info!(
             "updating model selection in config {} to {}",
             config_path.display(),
@@ -340,7 +206,6 @@ pub fn select_model(name: &str, config_path_override: Option<&Path>) -> Result<(
             config_path.display(),
             model_path_str
         );
-        config::write_default_config(&config_path, &model_path_str)?;
         update_config_transcription_selection(
             &config_path,
             TranscriptionBackend::WhisperCpp,
@@ -370,7 +235,7 @@ mod tests {
         let home = PathBuf::from("/home/alice");
         let path = PathBuf::from("/home/alice/.local/share/whispers/ggml.bin");
         assert_eq!(
-            path_for_config(&path, Some(&home)),
+            crate::model_support::path_for_config(&path, Some(&home)),
             "~/.local/share/whispers/ggml.bin"
         );
     }
@@ -380,27 +245,9 @@ mod tests {
         let home = PathBuf::from("/home/alice");
         let path = PathBuf::from("/var/lib/whispers/ggml.bin");
         assert_eq!(
-            path_for_config(&path, Some(&home)),
+            crate::model_support::path_for_config(&path, Some(&home)),
             "/var/lib/whispers/ggml.bin"
         );
-    }
-
-    #[test]
-    fn validated_existing_len_accepts_partial_content_resume() {
-        let len = validated_existing_len(100, reqwest::StatusCode::PARTIAL_CONTENT).unwrap();
-        assert_eq!(len, 100);
-    }
-
-    #[test]
-    fn validated_existing_len_restarts_on_ok_resume_response() {
-        let len = validated_existing_len(100, reqwest::StatusCode::OK).unwrap();
-        assert_eq!(len, 0);
-    }
-
-    #[test]
-    fn validated_existing_len_rejects_resume_on_error_status() {
-        let err = validated_existing_len(100, reqwest::StatusCode::RANGE_NOT_SATISFIABLE);
-        assert!(err.is_err());
     }
 
     #[test]
