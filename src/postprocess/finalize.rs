@@ -116,15 +116,7 @@ async fn finalize_rewrite_plan_or_fallback(
         tracing::warn!(
             "local rewrite backend requested, but this build does not include local rewrite support; using fallback"
         );
-        return finalize_plain_text(
-            plan.fallback_text,
-            SessionRewriteSummary {
-                had_edit_cues: false,
-                rewrite_used: false,
-                recommended_candidate: None,
-            },
-            &plan.rules,
-        );
+        return finalize_unavailable_rewrite_fallback(plan);
     }
 
     let local_rewrite_required = local_backend_requested
@@ -133,15 +125,7 @@ async fn finalize_rewrite_plan_or_fallback(
         tracing::warn!(
             "rewrite backend requires a local model but none is configured; using fallback"
         );
-        return finalize_plain_text(
-            plan.fallback_text,
-            SessionRewriteSummary {
-                had_edit_cues: false,
-                rewrite_used: false,
-                recommended_candidate: None,
-            },
-            &plan.rules,
-        );
+        return finalize_unavailable_rewrite_fallback(plan);
     }
 
     let rewrite_result = execution::execute_rewrite(config, rewrite_service, &plan).await;
@@ -202,6 +186,19 @@ fn finalize_plain_text(
         operation: FinalizedOperation::Append,
         rewrite_summary,
     }
+}
+
+fn finalize_unavailable_rewrite_fallback(plan: planning::RewritePlan) -> FinalizedTranscript {
+    finalize_plain_text(
+        plan.fallback_text,
+        SessionRewriteSummary {
+            had_edit_cues: plan.had_edit_cues,
+            rewrite_used: false,
+            recommended_candidate: plan.recommended_candidate,
+        },
+        &plan.rules,
+    )
+    .with_operation(plan.operation)
 }
 
 impl FinalizedTranscript {
@@ -309,12 +306,23 @@ mod tests {
     #[cfg(not(feature = "local-rewrite"))]
     async fn local_rewrite_unavailable_build_falls_back_to_plain_text() {
         let config = plan_config(PostprocessMode::AdvancedLocal, RewriteBackend::Local);
-        let plan = rewrite_plan();
+        let mut plan = rewrite_plan();
+        plan.operation = FinalizedOperation::ReplaceLastEntry {
+            entry_id: 11,
+            delete_graphemes: 6,
+        };
 
         let finalized = finalize_rewrite_plan_or_fallback(&config, None, plan).await;
 
         assert_eq!(finalized.text, "fallback text");
         assert!(!finalized.rewrite_summary.rewrite_used);
+        assert_eq!(
+            finalized.operation,
+            FinalizedOperation::ReplaceLastEntry {
+                entry_id: 11,
+                delete_graphemes: 6,
+            }
+        );
     }
 
     #[tokio::test]
