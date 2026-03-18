@@ -704,8 +704,12 @@ fn render_meter_bars(pixels: &mut [u8], w: u32, h: u32, bars: &BarState, center_
         let half_h = bar_h / 2;
         let top_y = center_y.saturating_sub(half_h);
 
-        for gy in top_y.saturating_sub(glow_expand)..=(top_y + bar_h + glow_expand).min(h.saturating_sub(1)) {
-            for gx in bx.saturating_sub(glow_expand)..=(bx + BAR_WIDTH + glow_expand).min(w.saturating_sub(1)) {
+        for gy in top_y.saturating_sub(glow_expand)
+            ..=(top_y + bar_h + glow_expand).min(h.saturating_sub(1))
+        {
+            for gx in bx.saturating_sub(glow_expand)
+                ..=(bx + BAR_WIDTH + glow_expand).min(w.saturating_sub(1))
+            {
                 set_pixel_blend(pixels, w, h, gx, gy, cr, cg, cb, glow_alpha);
             }
         }

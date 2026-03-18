@@ -16,7 +16,8 @@ pub struct Config {
     pub session: SessionConfig,
     pub personalization: PersonalizationConfig,
     pub rewrite: RewriteConfig,
-    pub agentic_rewrite: AgenticRewriteConfig,
+    #[serde(default, rename = "agentic_rewrite")]
+    legacy_agentic_rewrite: LegacyAgenticRewriteConfig,
     pub cloud: CloudConfig,
     pub cleanup: CleanupConfig,
     pub inject: InjectConfig,
@@ -83,8 +84,8 @@ pub struct PostprocessConfig {
 pub enum PostprocessMode {
     #[default]
     Raw,
-    AdvancedLocal,
-    AgenticRewrite,
+    #[serde(alias = "advanced_local", alias = "agentic_rewrite")]
+    Rewrite,
     LegacyBasic,
 }
 
@@ -117,11 +118,14 @@ pub struct RewriteConfig {
     pub idle_timeout_ms: u64,
     pub max_output_chars: usize,
     pub max_tokens: usize,
+    pub policy_path: String,
+    pub glossary_path: String,
+    pub default_correction_policy: RewriteCorrectionPolicy,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct AgenticRewriteConfig {
+struct LegacyAgenticRewriteConfig {
     pub policy_path: String,
     pub glossary_path: String,
     pub default_correction_policy: RewriteCorrectionPolicy,
@@ -298,14 +302,13 @@ impl PostprocessMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Raw => "raw",
-            Self::AdvancedLocal => "advanced_local",
-            Self::AgenticRewrite => "agentic_rewrite",
+            Self::Rewrite => "rewrite",
             Self::LegacyBasic => "legacy_basic",
         }
     }
 
     pub fn uses_rewrite(self) -> bool {
-        matches!(self, Self::AdvancedLocal | Self::AgenticRewrite)
+        matches!(self, Self::Rewrite)
     }
 }
 
@@ -378,11 +381,14 @@ impl Default for RewriteConfig {
             idle_timeout_ms: 120000,
             max_output_chars: 8192,
             max_tokens: 768,
+            policy_path: crate::agentic_rewrite::default_policy_path().into(),
+            glossary_path: crate::agentic_rewrite::default_glossary_path().into(),
+            default_correction_policy: RewriteCorrectionPolicy::Balanced,
         }
     }
 }
 
-impl Default for AgenticRewriteConfig {
+impl Default for LegacyAgenticRewriteConfig {
     fn default() -> Self {
         Self {
             policy_path: crate::agentic_rewrite::default_policy_path().into(),
@@ -517,6 +523,7 @@ impl Config {
 
         config.apply_legacy_transcription_migration(&contents, &config_path);
         config.apply_legacy_cleanup_migration(&contents, &config_path);
+        config.apply_legacy_rewrite_migration(&contents, &config_path);
         config.apply_cloud_sanitization();
         Ok(config)
     }
@@ -543,12 +550,20 @@ impl Config {
         PathBuf::from(expand_tilde(&self.personalization.snippets_path))
     }
 
+    pub fn resolved_rewrite_policy_path(&self) -> PathBuf {
+        PathBuf::from(expand_tilde(&self.rewrite.policy_path))
+    }
+
+    pub fn resolved_rewrite_glossary_path(&self) -> PathBuf {
+        PathBuf::from(expand_tilde(&self.rewrite.glossary_path))
+    }
+
     pub fn resolved_agentic_policy_path(&self) -> PathBuf {
-        PathBuf::from(expand_tilde(&self.agentic_rewrite.policy_path))
+        self.resolved_rewrite_policy_path()
     }
 
     pub fn resolved_agentic_glossary_path(&self) -> PathBuf {
-        PathBuf::from(expand_tilde(&self.agentic_rewrite.glossary_path))
+        self.resolved_rewrite_glossary_path()
     }
 
     fn apply_legacy_transcription_migration(&mut self, contents: &str, config_path: &Path) {
@@ -592,6 +607,44 @@ impl Config {
         } else if cleanup_present && self.postprocess.mode != PostprocessMode::LegacyBasic {
             tracing::warn!(
                 "config {} contains deprecated [cleanup]; [postprocess] takes precedence",
+                config_path.display()
+            );
+        }
+    }
+
+    fn apply_legacy_rewrite_migration(&mut self, contents: &str, config_path: &Path) {
+        let Ok(doc) = contents.parse::<toml_edit::DocumentMut>() else {
+            return;
+        };
+
+        if !section_present(contents, "agentic_rewrite") {
+            return;
+        }
+
+        let rewrite_has_policy = table_key_present(&doc, "rewrite", "policy_path");
+        let rewrite_has_glossary = table_key_present(&doc, "rewrite", "glossary_path");
+        let rewrite_has_default_policy =
+            table_key_present(&doc, "rewrite", "default_correction_policy");
+
+        if !rewrite_has_policy {
+            self.rewrite.policy_path = self.legacy_agentic_rewrite.policy_path.clone();
+        }
+        if !rewrite_has_glossary {
+            self.rewrite.glossary_path = self.legacy_agentic_rewrite.glossary_path.clone();
+        }
+        if !rewrite_has_default_policy {
+            self.rewrite.default_correction_policy =
+                self.legacy_agentic_rewrite.default_correction_policy;
+        }
+
+        if rewrite_has_policy || rewrite_has_glossary || rewrite_has_default_policy {
+            tracing::warn!(
+                "config {} contains deprecated [agentic_rewrite]; [rewrite] takes precedence",
+                config_path.display()
+            );
+        } else {
+            tracing::warn!(
+                "config {} uses deprecated [agentic_rewrite]; mapping to [rewrite]",
                 config_path.display()
             );
         }
@@ -715,7 +768,7 @@ flash_attn = true
 idle_timeout_ms = 120000
 
 [postprocess]
-# "raw" (default), "advanced_local", "agentic_rewrite", or "legacy_basic" for deprecated cleanup configs
+# "raw" (default), "rewrite", or "legacy_basic" for deprecated cleanup configs
 mode = "raw"
 
 [session]
@@ -741,7 +794,7 @@ snippet_trigger = "insert"
 backend = "local"
 # Cloud fallback behavior ("local" or "none")
 fallback = "local"
-# Managed rewrite model name for advanced_local mode
+# Managed rewrite model name for rewrite mode
 selected_model = "qwen-3.5-4b-q4_k_m"
 # Manual GGUF path override (empty = use selected managed model)
 # Custom rewrite models should be chat-capable GGUFs with an embedded
@@ -759,11 +812,9 @@ idle_timeout_ms = 120000
 max_output_chars = 8192
 # Maximum tokens to generate for rewritten output
 max_tokens = 768
-
-[agentic_rewrite]
-# App-aware rewrite policy rules used by postprocess.mode = "agentic_rewrite"
+# App-aware rewrite policy rules used by postprocess.mode = "rewrite"
 policy_path = "~/.local/share/whispers/app-rewrite-policy.toml"
-# Technical glossary used by postprocess.mode = "agentic_rewrite"
+# Technical glossary used by postprocess.mode = "rewrite"
 glossary_path = "~/.local/share/whispers/technical-glossary.toml"
 # Default correction policy ("conservative", "balanced", or "aggressive")
 default_correction_policy = "balanced"
@@ -880,6 +931,7 @@ pub fn update_config_postprocess_mode(config_path: &Path, mode: PostprocessMode)
         .map_err(|e| WhsprError::Config(format!("failed to parse config: {e}")))?;
 
     ensure_standard_postprocess_tables(&mut doc);
+    doc.as_table_mut().remove("agentic_rewrite");
     doc["postprocess"]["mode"] = toml_edit::value(mode.as_str());
 
     std::fs::write(config_path, doc.to_string())
@@ -897,15 +949,8 @@ pub fn update_config_rewrite_selection(config_path: &Path, selected_model: &str)
         .map_err(|e| WhsprError::Config(format!("failed to parse config: {e}")))?;
 
     ensure_standard_postprocess_tables(&mut doc);
-    let mode = match doc["postprocess"]
-        .as_table_like()
-        .and_then(|table| table.get("mode"))
-        .and_then(|item| item.as_str())
-    {
-        Some("agentic_rewrite") => PostprocessMode::AgenticRewrite,
-        _ => PostprocessMode::AdvancedLocal,
-    };
-    doc["postprocess"]["mode"] = toml_edit::value(mode.as_str());
+    doc.as_table_mut().remove("agentic_rewrite");
+    doc["postprocess"]["mode"] = toml_edit::value(PostprocessMode::Rewrite.as_str());
     let rewrite_backend = doc["rewrite"]
         .as_table_like()
         .and_then(|table| table.get("backend"))
@@ -923,11 +968,10 @@ pub fn update_config_rewrite_selection(config_path: &Path, selected_model: &str)
     doc["rewrite"]["idle_timeout_ms"] = toml_edit::value(120000);
     doc["rewrite"]["max_output_chars"] = toml_edit::value(8192);
     doc["rewrite"]["max_tokens"] = toml_edit::value(768);
-    doc["agentic_rewrite"]["policy_path"] =
-        toml_edit::value(crate::agentic_rewrite::default_policy_path());
-    doc["agentic_rewrite"]["glossary_path"] =
+    doc["rewrite"]["policy_path"] = toml_edit::value(crate::agentic_rewrite::default_policy_path());
+    doc["rewrite"]["glossary_path"] =
         toml_edit::value(crate::agentic_rewrite::default_glossary_path());
-    doc["agentic_rewrite"]["default_correction_policy"] =
+    doc["rewrite"]["default_correction_policy"] =
         toml_edit::value(RewriteCorrectionPolicy::Balanced.as_str());
 
     std::fs::write(config_path, doc.to_string())
@@ -1037,7 +1081,6 @@ fn ensure_standard_postprocess_tables(doc: &mut toml_edit::DocumentMut) {
     ensure_root_table(doc, "postprocess");
     ensure_root_table(doc, "session");
     ensure_root_table(doc, "rewrite");
-    ensure_root_table(doc, "agentic_rewrite");
     ensure_root_table(doc, "cloud");
     ensure_nested_table(doc, "cloud", "transcription");
     ensure_nested_table(doc, "cloud", "rewrite");
@@ -1049,9 +1092,9 @@ fn normalize_postprocess_mode(doc: &mut toml_edit::DocumentMut) {
     let current = doc["postprocess"]["mode"].as_str().unwrap_or_default();
     if !matches!(
         current,
-        "raw" | "advanced_local" | "agentic_rewrite" | "legacy_basic"
+        "raw" | "rewrite" | "advanced_local" | "agentic_rewrite" | "legacy_basic"
     ) {
-        doc["postprocess"]["mode"] = toml_edit::value(PostprocessMode::AdvancedLocal.as_str());
+        doc["postprocess"]["mode"] = toml_edit::value(PostprocessMode::Rewrite.as_str());
     }
 }
 
@@ -1084,6 +1127,13 @@ fn ensure_nested_table(doc: &mut toml_edit::DocumentMut, parent: &str, child: &s
 
 fn cleanup_section_present(contents: &str) -> bool {
     section_present(contents, "cleanup")
+}
+
+fn table_key_present(doc: &toml_edit::DocumentMut, table: &str, key: &str) -> bool {
+    doc[table]
+        .as_table_like()
+        .and_then(|table| table.get(key))
+        .is_some()
 }
 
 fn section_present(contents: &str, name: &str) -> bool {
@@ -1262,7 +1312,7 @@ remove_fillers = false
     }
 
     #[test]
-    fn update_rewrite_selection_enables_advanced_mode() {
+    fn update_rewrite_selection_enables_rewrite_mode() {
         let dir = crate::test_support::unique_temp_dir("config-rewrite-select");
         let config_path = dir.join("config.toml");
         write_default_config(&config_path, "~/model.bin").expect("write config");
@@ -1271,7 +1321,7 @@ remove_fillers = false
             .expect("select rewrite model");
 
         let loaded = Config::load(Some(&config_path)).expect("load config");
-        assert_eq!(loaded.postprocess.mode, PostprocessMode::AdvancedLocal);
+        assert_eq!(loaded.postprocess.mode, PostprocessMode::Rewrite);
         assert_eq!(loaded.rewrite.selected_model, "qwen-3.5-2b-q4_k_m");
         assert!(loaded.rewrite.model_path.is_empty());
         assert_eq!(
@@ -1315,7 +1365,7 @@ language = "auto"
             TranscriptionBackend::WhisperCpp
         );
         assert_eq!(loaded.transcription.selected_model, "large-v3-turbo");
-        assert_eq!(loaded.postprocess.mode, PostprocessMode::AdvancedLocal);
+        assert_eq!(loaded.postprocess.mode, PostprocessMode::Rewrite);
         assert_eq!(loaded.rewrite.selected_model, "qwen-3.5-4b-q4_k_m");
 
         let raw = std::fs::read_to_string(&config_path).expect("read upgraded config");

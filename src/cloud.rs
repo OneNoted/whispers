@@ -679,7 +679,7 @@ mod tests {
         crate::test_support::set_env("OPENAI_API_KEY", "test-key");
 
         let mut config = Config::default();
-        config.postprocess.mode = crate::config::PostprocessMode::AdvancedLocal;
+        config.postprocess.mode = crate::config::PostprocessMode::Rewrite;
         config.rewrite.backend = RewriteBackend::Cloud;
         config.cloud.base_url = format!("{}/v1", server.base_url());
         let service = CloudService::new(&config).expect("service");
@@ -701,6 +701,7 @@ mod tests {
                     edit_hypotheses: Vec::new(),
                     rewrite_candidates: Vec::new(),
                     recommended_candidate: None,
+                    edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
                     policy_context: crate::rewrite_protocol::RewritePolicyContext::default(),
                 },
                 None,

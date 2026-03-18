@@ -332,16 +332,9 @@ async fn choose_rewrite_model(
 }
 
 fn choose_rewrite_mode(ui: &SetupUi) -> Result<PostprocessMode> {
-    let items = [
-        "advanced_local: smart rewrite cleanup with current bounded-candidate behavior",
-        "agentic_rewrite: app-aware rewrite with policy and technical glossary support",
-    ];
-    let selection = ui.select("Choose the rewrite mode", &items, 1)?;
-    Ok(if selection == 0 {
-        PostprocessMode::AdvancedLocal
-    } else {
-        PostprocessMode::AgenticRewrite
-    })
+    let items = ["rewrite: LLM-based rewrite with policy and technical glossary support"];
+    let _selection = ui.select("Choose the rewrite mode", &items, 0)?;
+    Ok(PostprocessMode::Rewrite)
 }
 
 fn configure_voice(ui: &SetupUi, postprocess_mode: PostprocessMode) -> Result<VoiceSetup> {
@@ -700,7 +693,7 @@ fn maybe_create_agentic_starter_files(
     config_path: &Path,
     selections: &SetupSelections,
 ) -> Result<()> {
-    if selections.postprocess_mode != PostprocessMode::AgenticRewrite {
+    if !selections.postprocess_mode.uses_rewrite() {
         return Ok(());
     }
 

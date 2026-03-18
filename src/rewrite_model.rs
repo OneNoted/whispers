@@ -31,7 +31,7 @@ pub const REWRITE_MODELS: &[RewriteModelInfo] = &[
         name: "qwen-3.5-4b-q4_k_m",
         filename: "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
         size: "~2.9 GB",
-        description: "Recommended balance for advanced_local mode",
+        description: "Recommended balance for rewrite mode",
         url: "https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/main/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
         profile: RewriteProfile::Qwen,
     },
@@ -293,7 +293,7 @@ mod tests {
 
         select_model("qwen-3.5-2b-q4_k_m", Some(&config_path)).expect("select model");
         let loaded = Config::load(Some(&config_path)).expect("load config");
-        assert_eq!(loaded.postprocess.mode, PostprocessMode::AdvancedLocal);
+        assert_eq!(loaded.postprocess.mode, PostprocessMode::Rewrite);
         assert_eq!(loaded.rewrite.selected_model, "qwen-3.5-2b-q4_k_m");
     }
 

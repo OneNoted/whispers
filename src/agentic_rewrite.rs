@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Config, PostprocessMode};
+use crate::config::Config;
 use crate::error::{Result, WhsprError};
 use crate::rewrite_protocol::{
     RewriteCandidate, RewriteCandidateKind, RewriteCorrectionPolicy, RewritePolicyContext,
@@ -13,7 +13,7 @@ const DEFAULT_POLICY_PATH: &str = "~/.local/share/whispers/app-rewrite-policy.to
 const DEFAULT_GLOSSARY_PATH: &str = "~/.local/share/whispers/technical-glossary.toml";
 const MAX_GLOSSARY_CANDIDATES: usize = 4;
 
-const POLICY_STARTER: &str = r#"# App-aware rewrite policy for whispers agentic_rewrite mode.
+const POLICY_STARTER: &str = r#"# App-aware rewrite policy for whispers rewrite mode.
 # Rules are layered, not first-match. Matching rules apply in this order:
 # global defaults, surface_kind, app_id, window_title_contains, browser_domain_contains.
 # Later, more specific rules override earlier fields.
@@ -38,7 +38,7 @@ const POLICY_STARTER: &str = r#"# App-aware rewrite policy for whispers agentic_
 # instructions = "Preserve identifiers, filenames, snake_case, camelCase, and Rust terminology."
 "#;
 
-const GLOSSARY_STARTER: &str = r#"# Technical glossary for whispers agentic_rewrite mode.
+const GLOSSARY_STARTER: &str = r#"# Technical glossary for whispers rewrite mode.
 # Each entry defines a canonical term plus likely spoken or mis-transcribed aliases.
 #
 # Uncomment and edit the examples below.
@@ -240,7 +240,7 @@ pub fn apply_runtime_policy(config: &Config, transcript: &mut RewriteTranscript)
     let glossary_entries = load_glossary_file_for_runtime(&config.resolved_agentic_glossary_path());
 
     let policy_context = resolve_policy_context(
-        config.agentic_rewrite.default_correction_policy,
+        config.rewrite.default_correction_policy,
         transcript.typing_context.as_ref(),
         &transcript.rewrite_candidates,
         &policy_rules,
@@ -395,7 +395,7 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
 }
 
 pub fn ensure_starter_files(config: &Config) -> Result<Vec<String>> {
-    if config.postprocess.mode != PostprocessMode::AgenticRewrite {
+    if !config.postprocess.mode.uses_rewrite() {
         return Ok(Vec::new());
     }
 
@@ -1069,6 +1069,7 @@ mod tests {
                 text: "type script and sir dee json".into(),
             }],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         }
     }
@@ -1254,6 +1255,7 @@ mod tests {
                 text: "I'm currently using the window manager hyperland.".into(),
             }],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         };
         hyperland_transcript.policy_context = resolve_policy_context(
@@ -1287,6 +1289,7 @@ mod tests {
                 text: "I'm switching from Sui to Hyperland.".into(),
             }],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         };
         switch_transcript.policy_context = resolve_policy_context(
@@ -1323,6 +1326,7 @@ mod tests {
                 text: "cargo clipy".into(),
             }],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         };
         transcript.policy_context.correction_policy = RewriteCorrectionPolicy::Conservative;

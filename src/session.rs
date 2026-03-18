@@ -551,6 +551,7 @@ mod tests {
                 kind: crate::rewrite_protocol::RewriteCandidateKind::SentenceReplacement,
                 text: "Hi".into(),
             }),
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: crate::rewrite_protocol::RewritePolicyContext::default(),
         };
 
@@ -606,6 +607,7 @@ mod tests {
             edit_hypotheses: Vec::new(),
             rewrite_candidates: Vec::new(),
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: crate::rewrite_protocol::RewritePolicyContext::default(),
         };
 

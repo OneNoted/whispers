@@ -181,43 +181,40 @@ fn render_status(config_path: &Path, config_exists: bool, config: &Config) -> St
         ValueStyle::Value,
     );
 
-    push_section(&mut out, "Agentic Rewrite");
+    push_section(&mut out, "Rewrite Policy");
     push_field(
         &mut out,
         "enabled",
-        yes_no(matches!(
-            config.postprocess.mode,
-            crate::config::PostprocessMode::AgenticRewrite
-        )),
+        yes_no(config.postprocess.mode.uses_rewrite()),
         ValueStyle::Boolean,
     );
     push_field(
         &mut out,
         "default_correction_policy",
-        config.agentic_rewrite.default_correction_policy.as_str(),
+        config.rewrite.default_correction_policy.as_str(),
         ValueStyle::Value,
     );
     push_field(
         &mut out,
         "policy_status",
-        path_presence_status(Some(config.resolved_agentic_policy_path().as_path())),
+        path_presence_status(Some(config.resolved_rewrite_policy_path().as_path())),
         ValueStyle::Status,
     );
     push_path_field(
         &mut out,
         "policy_path",
-        &config.resolved_agentic_policy_path(),
+        &config.resolved_rewrite_policy_path(),
     );
     push_field(
         &mut out,
         "glossary_status",
-        path_presence_status(Some(config.resolved_agentic_glossary_path().as_path())),
+        path_presence_status(Some(config.resolved_rewrite_glossary_path().as_path())),
         ValueStyle::Status,
     );
     push_path_field(
         &mut out,
         "glossary_path",
-        &config.resolved_agentic_glossary_path(),
+        &config.resolved_rewrite_glossary_path(),
     );
 
     push_section(&mut out, "Cloud");
@@ -595,12 +592,12 @@ mod tests {
         config.transcription.local_backend = TranscriptionBackend::WhisperCpp;
         config.transcription.model_path = asr_model.display().to_string();
         config.transcription.selected_model = "large-v3-turbo".into();
-        config.postprocess.mode = PostprocessMode::AgenticRewrite;
+        config.postprocess.mode = PostprocessMode::Rewrite;
         config.rewrite.backend = RewriteBackend::Local;
         config.rewrite.model_path = rewrite_model.display().to_string();
         config.rewrite.instructions_path = instructions_path.display().to_string();
-        config.agentic_rewrite.policy_path = policy_path.display().to_string();
-        config.agentic_rewrite.glossary_path = glossary_path.display().to_string();
+        config.rewrite.policy_path = policy_path.display().to_string();
+        config.rewrite.glossary_path = glossary_path.display().to_string();
         config.personalization.dictionary_path = dictionary_path.display().to_string();
         config.personalization.snippets_path = snippets_path.display().to_string();
         config.cloud.api_key = String::new();
@@ -629,7 +626,7 @@ mod tests {
         assert!(rendered.contains(&format!(
             "{}: {}",
             crate::ui::summary_key("mode"),
-            style_value(ValueStyle::Value, "agentic_rewrite")
+            style_value(ValueStyle::Value, "rewrite")
         )));
         assert!(rendered.contains(&format!(
             "{}: {}",

@@ -40,9 +40,7 @@ pub fn raw_text(transcript: &Transcript) -> String {
 fn base_text(config: &Config, transcript: &Transcript) -> String {
     match config.postprocess.mode {
         PostprocessMode::LegacyBasic => cleanup::clean_transcript(transcript, &config.cleanup),
-        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
-            cleanup::correction_aware_text(transcript)
-        }
+        PostprocessMode::Rewrite => cleanup::correction_aware_text(transcript),
         PostprocessMode::Raw => raw_text(transcript),
     }
 }
@@ -83,7 +81,7 @@ pub async fn finalize_transcript(
             },
             &rules,
         ),
-        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
+        PostprocessMode::Rewrite => {
             rewrite_transcript_or_fallback(
                 config,
                 &transcript,
@@ -162,10 +160,18 @@ async fn rewrite_transcript_or_fallback(
     }
     let mut rewrite_transcript = personalization::build_rewrite_transcript(transcript, rules);
     rewrite_transcript.typing_context = typing_context.and_then(session::to_rewrite_typing_context);
-    if config.postprocess.mode == PostprocessMode::AgenticRewrite {
-        agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
-    }
+    agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
     let session_plan = session::build_backtrack_plan(&rewrite_transcript, recent_session);
+    rewrite_transcript.edit_context.has_recent_same_focus_entry = recent_session.is_some();
+    rewrite_transcript
+        .edit_context
+        .recommended_session_action_is_replace =
+        session_plan.recommended.as_ref().is_some_and(|candidate| {
+            matches!(
+                candidate.kind,
+                RewriteSessionBacktrackCandidateKind::ReplaceLastEntry
+            )
+        });
     rewrite_transcript.recent_session_entries = session_plan.recent_entries.clone();
     rewrite_transcript.session_backtrack_candidates = session_plan.candidates.clone();
     rewrite_transcript.recommended_session_candidate = session_plan.recommended.clone();
@@ -194,49 +200,6 @@ async fn rewrite_transcript_or_fallback(
         crate::rewrite::debug_summary(&rewrite_transcript)
     );
     let custom_instructions = personalization::custom_instructions(rules);
-    let deterministic_session_replacement = session_plan.deterministic_replacement_text.clone();
-
-    if let Some(text) = deterministic_session_replacement {
-        tracing::debug!(
-            output_len = text.len(),
-            mode = config.postprocess.mode.as_str(),
-            "using deterministic session replacement"
-        );
-        let operation = rewrite_transcript
-            .recommended_session_candidate
-            .as_ref()
-            .and_then(|candidate| {
-                matches!(
-                    candidate.kind,
-                    RewriteSessionBacktrackCandidateKind::ReplaceLastEntry
-                )
-                .then_some(FinalizedOperation::ReplaceLastEntry {
-                    entry_id: candidate.entry_id?,
-                    delete_graphemes: candidate.delete_graphemes,
-                })
-            })
-            .unwrap_or(FinalizedOperation::Append);
-        return finalize_plain_text(
-            text,
-            SessionRewriteSummary {
-                had_edit_cues: !rewrite_transcript.edit_signals.is_empty()
-                    || !rewrite_transcript.edit_hypotheses.is_empty(),
-                rewrite_used: false,
-                recommended_candidate: rewrite_transcript
-                    .recommended_session_candidate
-                    .as_ref()
-                    .map(|candidate| candidate.text.clone())
-                    .or_else(|| {
-                        rewrite_transcript
-                            .recommended_candidate
-                            .as_ref()
-                            .map(|candidate| candidate.text.clone())
-                    }),
-            },
-            rules,
-        )
-        .with_operation(operation);
-    }
 
     let rewrite_result = match config.rewrite.backend {
         RewriteBackend::Local => {
@@ -423,16 +386,12 @@ impl FinalizedTranscript {
 }
 
 fn rewrite_output_accepted(
-    config: &Config,
+    _config: &Config,
     rewrite_transcript: &RewriteTranscript,
     text: &str,
 ) -> bool {
     if text.trim().is_empty() {
         return false;
-    }
-
-    if config.postprocess.mode != PostprocessMode::AgenticRewrite {
-        return true;
     }
 
     match rewrite_transcript.policy_context.correction_policy {

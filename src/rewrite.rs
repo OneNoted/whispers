@@ -120,8 +120,9 @@ fn agentic_latitude_contract(
 fn rewrite_instructions(profile: ResolvedRewriteProfile) -> &'static str {
     let base = "You clean up dictated speech into the final text the user meant to type. \
 Return only the finished text. Do not explain anything. Remove obvious disfluencies when natural. \
-Use the correction-aware transcript as the primary source of truth unless structured edit signals say the \
-utterance may still be ambiguous. The raw transcript may still contain spoken editing phrases or canceled wording. \
+Use the correction-aware transcript as strong heuristic evidence. When structured edit signals are present, treat it \
+as advisory rather than absolute and resolve ambiguity using the raw transcript, session context, and candidates. The \
+raw transcript may still contain spoken editing phrases or canceled wording. \
 Never reintroduce text that was removed by an explicit spoken correction cue. Respect any structured edit intents \
 provided alongside the transcript. If structured edit signals or edit hypotheses are present, use the candidate \
 interpretations as bounded options, choose the best interpretation, and lightly refine it only when needed for natural \
@@ -134,8 +135,9 @@ tool to disambiguate technical names. When a dictated word is an obvious phoneti
 and the surrounding context clearly identifies the category, correct it to the canonical technical spelling instead of \
 echoing the miss. If multiple plausible interpretations remain similarly credible, stay close to the transcript rather \
 than inventing a niche term. \
-If an edit intent says to replace or cancel previous wording, preserve that edit and do not keep the spoken correction \
-phrase itself unless the transcript clearly still intends it. Examples:\n\
+If an edit intent says to replace or cancel previous wording, preserve that edit when the utterance or same-session \
+context clearly supports it. Preserve utterance-initial courtesy or apology wording when the raw transcript still \
+clearly intends it. Examples:\n\
 - raw: Hello there. Scratch that. Hi.\n  correction-aware: Hi.\n  final: Hi.\n\
 - raw: I'll bring cookies, scratch that, brownies.\n  correction-aware: I'll bring brownies.\n  final: I'll bring brownies.\n\
 - raw: My name is Notes, scratch that my name is Jonatan.\n  correction-aware: My my name is Jonatan.\n  aggressive correction-aware: My name is Jonatan.\n  final: My name is Jonatan.\n\
@@ -152,8 +154,9 @@ phrase itself unless the transcript clearly still intends it. Examples:\n\
         ResolvedRewriteProfile::Qwen => {
             "You clean up dictated speech into the final text the user meant to type. \
 Return only the finished text. Do not explain anything. Do not emit reasoning, think tags, or XML wrappers. \
-Remove obvious disfluencies when natural. Use the correction-aware transcript as the primary source of truth unless \
-structured edit signals say the utterance may still be ambiguous. The raw transcript may still contain spoken editing \
+Remove obvious disfluencies when natural. Use the correction-aware transcript as strong heuristic evidence. When \
+structured edit signals are present, treat it as advisory rather than absolute and resolve ambiguity using the raw \
+transcript, session context, and candidates. The raw transcript may still contain spoken editing \
 phrases or canceled wording. Never reintroduce text that was removed by an explicit spoken correction cue. Respect \
 any structured edit intents provided alongside the transcript. If structured edit signals or edit hypotheses are \
 present, use the candidate interpretations as bounded options, choose the best interpretation, and lightly refine it \
@@ -165,8 +168,7 @@ phonetically similar common word. Use nearby category words like window manager,
 manager, shell, or terminal tool to disambiguate technical names. When a dictated word is an obvious phonetic near-miss \
 for a likely technical term and the surrounding context clearly identifies the category, correct it to the canonical \
 technical spelling instead of echoing the miss. If multiple plausible interpretations remain similarly credible, stay \
-close to the transcript rather than inventing a niche term. If an edit intent says to replace or cancel previous wording, preserve that edit and do \
-not keep the spoken correction phrase itself unless the transcript clearly still intends it. Examples:\n\
+close to the transcript rather than inventing a niche term. If an edit intent says to replace or cancel previous wording, preserve that edit when the utterance or same-session context clearly supports it. Preserve utterance-initial courtesy or apology wording when the raw transcript still clearly intends it. Examples:\n\
 - raw: Hello there. Scratch that. Hi.\n  correction-aware: Hi.\n  final: Hi.\n\
 - raw: I'll bring cookies, scratch that, brownies.\n  correction-aware: I'll bring brownies.\n  final: I'll bring brownies.\n\
 - raw: My name is Notes, scratch that my name is Jonatan.\n  correction-aware: My my name is Jonatan.\n  aggressive correction-aware: My name is Jonatan.\n  final: My name is Jonatan.\n\
@@ -198,6 +200,7 @@ fn build_user_message(transcript: &RewriteTranscript) -> String {
     let raw = transcript.raw_text.trim();
     let edit_intents = render_edit_intents(transcript);
     let edit_signals = render_edit_signals(transcript);
+    let edit_context = render_edit_context(transcript);
     let agentic_context = render_agentic_context(transcript);
     let route = rewrite_route(transcript);
     tracing::debug!(
@@ -236,12 +239,15 @@ Active typing context:\n\
 Recent dictation session:\n\
 {recent_session_entries}\
 {agentic_policy_context}\
+Structured cue context:\n\
+{edit_context}\
 Session backtrack candidates:\n\
 {session_candidates}\
 {recommended_session_candidate}\
 The user may be correcting the most recent prior dictation entry rather than appending new text.\n\
 If the recommended session candidate says replace_last_entry, treat your final text as the replacement text for that previous dictation entry, not as newly appended text.\n\
 Prefer the recommended session candidate unless another listed session candidate is clearly better.\n\
+If the utterance begins with a courtesy-prefixed correction cue and the session evidence is weak, preserve the courtesy wording instead of assuming replacement.\n\
 {surface_guidance}\
 Current utterance correction candidate:\n\
 {correction_aware}\n\
@@ -259,9 +265,12 @@ Final text:"
             let recent_segments = render_recent_segments(transcript, 4);
             let aggressive_candidate = render_aggressive_candidate(transcript);
             let exact_cue_guidance = if has_strong_explicit_edit_cue(transcript) {
-                "A strong explicit spoken edit cue was detected. The literal raw transcript probably contains canceled wording. \
-Prefer a candidate interpretation that removes the cue and canceled wording unless doing so would clearly lose intended meaning. \
-If the cue is an exact strong match for phrases like scratch that, never mind, or wait no, do not keep the literal cue text in the final output.\n"
+                if opening_cue_requires_literal_bias(transcript) {
+                    "A strong edit cue appears at the beginning of the utterance without strong same-session replacement evidence. \
+Do not assume it cancels earlier text. If the opening includes courtesy language such as sorry or my apologies, preserve that courtesy wording unless another candidate is clearly better.\n"
+                } else {
+                    "A strong explicit spoken edit cue was detected. Prefer a candidate interpretation that preserves the intended edit when the cue clearly corrects earlier same-utterance wording or the most recent same-session dictation.\n"
+                }
             } else {
                 ""
             };
@@ -276,12 +285,13 @@ Structured edit signals:\n\
 {edit_signals}\
 Structured edit intents:\n\
 {edit_intents}\
+Structured cue context:\n\
+{edit_context}\
 This utterance likely contains spoken self-corrections or restatements.\n\
 Choose the best candidate interpretation and lightly refine it only when needed.\n\
 {exact_cue_guidance}\
-When an exact strong edit cue is present, treat the non-literal candidates as more trustworthy than the literal transcript.\n\
-The candidate list is ordered from most likely to least likely by heuristics.\n\
-For exact strong edit cues, the first candidate is the heuristic best guess and should usually win unless another candidate is clearly better.\n\
+When an exact strong edit cue is present, treat non-literal candidates as evidence, not an automatic winner.\n\
+The candidate list is ordered heuristically and may be wrong for utterance-initial or courtesy-prefixed cues.\n\
 Prefer the smallest replacement scope that yields a coherent result.\n\
 Use span-level replacements when only a key phrase was corrected, clause-level replacements when the correction replaces the surrounding thought, and sentence-level replacements only when the whole sentence was canceled.\n\
 Preserve literal wording when the cue is not actually an edit.\n\
@@ -336,6 +346,8 @@ Structured edit signals:\n\
 {edit_signals}\
 Structured edit intents:\n\
 {edit_intents}\
+Structured cue context:\n\
+{edit_context}\
 Self-corrections were already resolved before rewriting.\n\
 Use this correction-aware transcript as the main source text. In agentic mode, you may still normalize likely \
 technical terms or proper names when the utterance strongly supports them, even if the exact canonical spelling is not \
@@ -355,6 +367,8 @@ Structured edit signals:\n\
 {edit_signals}\
 Structured edit intents:\n\
 {edit_intents}\
+Structured cue context:\n\
+{edit_context}\
 Correction-aware transcript:\n\
 {correction_aware}\n\
 Treat the correction-aware transcript as authoritative for explicit spoken edits and overall meaning, but in agentic \
@@ -544,6 +558,15 @@ fn has_strong_explicit_edit_cue(transcript: &RewriteTranscript) -> bool {
     })
 }
 
+fn opening_cue_requires_literal_bias(transcript: &RewriteTranscript) -> bool {
+    transcript.edit_context.cue_is_utterance_initial
+        && transcript.edit_context.courtesy_prefix_detected
+        && !(transcript.edit_context.has_recent_same_focus_entry
+            && transcript
+                .edit_context
+                .recommended_session_action_is_replace)
+}
+
 fn has_session_backtrack_candidate(transcript: &RewriteTranscript) -> bool {
     transcript.recommended_session_candidate.is_some()
         || !transcript.session_backtrack_candidates.is_empty()
@@ -655,6 +678,25 @@ fn render_edit_hypotheses(transcript: &RewriteTranscript) -> String {
     }
 
     rendered
+}
+
+fn render_edit_context(transcript: &RewriteTranscript) -> String {
+    format!(
+        "- cue_is_utterance_initial: {}\n- preceding_content_word_count: {}\n- courtesy_prefix_detected: {}\n- has_recent_same_focus_entry: {}\n- recommended_session_action_is_replace: {}\n",
+        yes_no(transcript.edit_context.cue_is_utterance_initial),
+        transcript.edit_context.preceding_content_word_count,
+        yes_no(transcript.edit_context.courtesy_prefix_detected),
+        yes_no(transcript.edit_context.has_recent_same_focus_entry),
+        yes_no(
+            transcript
+                .edit_context
+                .recommended_session_action_is_replace
+        ),
+    )
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 fn render_rewrite_candidates(transcript: &RewriteTranscript) -> String {
@@ -1101,6 +1143,7 @@ mod tests {
                 kind: RewriteCandidateKind::Literal,
                 text: "Hi there, this is a test. Wait, no. Hi there.".into(),
             }),
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         }
     }
@@ -1134,6 +1177,7 @@ mod tests {
                 },
             ],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         }
     }
@@ -1170,6 +1214,7 @@ mod tests {
                 },
             ],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext {
                 correction_policy: RewriteCorrectionPolicy::Balanced,
                 matched_rule_names: vec!["baseline/global-default".into()],
@@ -1287,9 +1332,11 @@ mod tests {
         assert!(instructions.contains(
             "do not keep an obviously wrong technical spelling just because it appears in the candidate list"
         ));
-        assert!(instructions.contains(
-            "even if that exact spelling is not already present in the candidate list"
-        ));
+        assert!(
+            instructions.contains(
+                "even if that exact spelling is not already present in the candidate list"
+            )
+        );
     }
 
     #[test]
@@ -1352,9 +1399,11 @@ mod tests {
         assert!(prompt.contains("Candidate interpretations"));
         assert!(prompt.contains("A strong explicit spoken edit cue was detected"));
         assert!(prompt.contains(
-            "The candidate list is ordered from most likely to least likely by heuristics."
+            "The candidate list is ordered heuristically and may be wrong for utterance-initial or courtesy-prefixed cues."
         ));
-        assert!(prompt.contains("the first candidate is the heuristic best guess"));
+        assert!(
+            prompt.contains("treat non-literal candidates as evidence, not an automatic winner")
+        );
         assert!(prompt.contains("Recommended interpretation:"));
         assert!(prompt.contains(
             "Use this as the default final text unless another candidate is clearly better."
@@ -1362,6 +1411,7 @@ mod tests {
         assert!(
             prompt.contains("Prefer the smallest replacement scope that yields a coherent result.")
         );
+        assert!(prompt.contains("Structured cue context"));
         assert!(prompt.contains("- preferred_candidate"));
         assert!(prompt.contains(
             "- preferred_candidate literal (keep only if the cue was not actually an edit): Hi there, this is a test. Wait, no. Hi there."
@@ -1375,6 +1425,65 @@ mod tests {
         assert!(prompt.contains("Correction candidate:\nHi there."));
         assert!(prompt.contains("Raw transcript:\nHi there, this is a test. Wait, no. Hi there."));
         assert!(prompt.contains("Recent segments"));
+    }
+
+    #[test]
+    fn cue_prompt_preserves_courtesy_prefixed_opening_guidance() {
+        let transcript = RewriteTranscript {
+            raw_text: "My apologies, I meant jonatan.".into(),
+            correction_aware_text: "Jonatan.".into(),
+            aggressive_correction_text: None,
+            detected_language: Some("en".into()),
+            typing_context: None,
+            recent_session_entries: Vec::new(),
+            session_backtrack_candidates: Vec::new(),
+            recommended_session_candidate: None,
+            segments: Vec::new(),
+            edit_intents: vec![RewriteEditIntent {
+                action: RewriteEditAction::ReplacePreviousPhrase,
+                trigger: "i meant".into(),
+                confidence: RewriteIntentConfidence::High,
+            }],
+            edit_signals: vec![RewriteEditSignal {
+                trigger: "i meant".into(),
+                kind: RewriteEditSignalKind::Replace,
+                scope_hint: RewriteEditSignalScope::Phrase,
+                strength: RewriteEditSignalStrength::Strong,
+            }],
+            edit_hypotheses: vec![RewriteEditHypothesis {
+                cue_family: "i_meant".into(),
+                matched_text: "i meant".into(),
+                match_source: RewriteEditHypothesisMatchSource::Exact,
+                kind: RewriteEditSignalKind::Replace,
+                scope_hint: RewriteEditSignalScope::Phrase,
+                replacement_scope: RewriteReplacementScope::Span,
+                tail_shape: RewriteTailShape::Phrase,
+                strength: RewriteEditSignalStrength::Strong,
+            }],
+            rewrite_candidates: vec![
+                RewriteCandidate {
+                    kind: RewriteCandidateKind::Literal,
+                    text: "My apologies, I meant jonatan.".into(),
+                },
+                RewriteCandidate {
+                    kind: RewriteCandidateKind::ConservativeCorrection,
+                    text: "Jonatan.".into(),
+                },
+            ],
+            recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext {
+                cue_is_utterance_initial: true,
+                preceding_content_word_count: 0,
+                courtesy_prefix_detected: true,
+                has_recent_same_focus_entry: false,
+                recommended_session_action_is_replace: false,
+            },
+            policy_context: RewritePolicyContext::default(),
+        };
+
+        let prompt = build_user_message(&transcript);
+        assert!(prompt.contains("preserve that courtesy wording"));
+        assert!(prompt.contains("courtesy_prefix_detected: yes"));
     }
 
     #[test]
@@ -1426,6 +1535,7 @@ mod tests {
                 text: "Hi there.".into(),
             }],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         };
 
@@ -1458,6 +1568,7 @@ mod tests {
                 text: "hi there".into(),
             }],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         };
         assert_eq!(effective_max_tokens(256, &short), 48);
@@ -1480,6 +1591,7 @@ mod tests {
                 text: "word ".repeat(80),
             }],
             recommended_candidate: None,
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         };
         assert_eq!(effective_max_tokens(256, &long), 184);
@@ -1547,6 +1659,7 @@ mod tests {
                 kind: RewriteCandidateKind::SentenceReplacement,
                 text: "Hi".into(),
             }),
+            edit_context: crate::rewrite_protocol::RewriteEditContext::default(),
             policy_context: RewritePolicyContext::default(),
         };
 

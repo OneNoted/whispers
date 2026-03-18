@@ -6,11 +6,11 @@ use crate::cleanup;
 use crate::config::Config;
 use crate::error::{Result, WhsprError};
 use crate::rewrite_protocol::{
-    RewriteCandidate, RewriteCandidateKind, RewriteEditAction, RewriteEditHypothesis,
-    RewriteEditHypothesisMatchSource, RewriteEditIntent, RewriteEditSignal, RewriteEditSignalKind,
-    RewriteEditSignalScope, RewriteEditSignalStrength, RewriteIntentConfidence,
-    RewritePolicyContext, RewriteReplacementScope, RewriteTailShape, RewriteTranscript,
-    RewriteTranscriptSegment,
+    RewriteCandidate, RewriteCandidateKind, RewriteEditAction, RewriteEditContext,
+    RewriteEditHypothesis, RewriteEditHypothesisMatchSource, RewriteEditIntent, RewriteEditSignal,
+    RewriteEditSignalKind, RewriteEditSignalScope, RewriteEditSignalStrength,
+    RewriteIntentConfidence, RewritePolicyContext, RewriteReplacementScope, RewriteTailShape,
+    RewriteTranscript, RewriteTranscriptSegment,
 };
 use crate::transcribe::Transcript;
 
@@ -153,8 +153,12 @@ pub fn build_rewrite_transcript(
         &analysis.edit_hypotheses,
         rules,
     );
-    let recommended_candidate =
-        recommended_candidate(&rewrite_candidates, &analysis.edit_hypotheses);
+    let edit_context = derive_edit_context(&transcript.raw_text, &analysis.edit_hypotheses);
+    let recommended_candidate = recommended_candidate(
+        &rewrite_candidates,
+        &analysis.edit_hypotheses,
+        &edit_context,
+    );
 
     RewriteTranscript {
         raw_text,
@@ -221,6 +225,7 @@ pub fn build_rewrite_transcript(
         edit_hypotheses,
         rewrite_candidates,
         recommended_candidate,
+        edit_context,
         policy_context: RewritePolicyContext::default(),
     }
 }
@@ -386,7 +391,10 @@ fn build_rewrite_candidates(
         }
     }
 
-    if has_strong_explicit_hypothesis(edit_hypotheses) {
+    let edit_context = derive_edit_context(raw_text, edit_hypotheses);
+    if has_strong_explicit_hypothesis(edit_hypotheses)
+        && !(edit_context.cue_is_utterance_initial && edit_context.courtesy_prefix_detected)
+    {
         candidates.sort_by_key(|candidate| candidate_priority(candidate.kind));
     }
 
@@ -670,10 +678,68 @@ fn normalize_candidate_spacing(text: &str) -> Option<String> {
 fn recommended_candidate(
     rewrite_candidates: &[RewriteCandidate],
     edit_hypotheses: &[cleanup::EditHypothesis],
+    edit_context: &RewriteEditContext,
 ) -> Option<RewriteCandidate> {
+    if edit_context.cue_is_utterance_initial && edit_context.courtesy_prefix_detected {
+        return None;
+    }
+
     has_strong_explicit_hypothesis(edit_hypotheses)
         .then(|| rewrite_candidates.first().cloned())
         .flatten()
+}
+
+fn derive_edit_context(
+    raw_text: &str,
+    edit_hypotheses: &[cleanup::EditHypothesis],
+) -> RewriteEditContext {
+    let spans = collect_word_spans(raw_text);
+    let Some(hypothesis) = earliest_strong_explicit_hypothesis(edit_hypotheses) else {
+        return RewriteEditContext::default();
+    };
+
+    let prefix_words = spans
+        .get(..hypothesis.word_start)
+        .unwrap_or(&[])
+        .iter()
+        .map(|span| span.normalized.as_str())
+        .collect::<Vec<_>>();
+    let courtesy_prefix_word_count = courtesy_prefix_word_count(&prefix_words);
+    let preceding_content_word_count = prefix_words
+        .len()
+        .saturating_sub(courtesy_prefix_word_count);
+
+    RewriteEditContext {
+        cue_is_utterance_initial: prefix_words.is_empty() || preceding_content_word_count == 0,
+        preceding_content_word_count,
+        courtesy_prefix_detected: courtesy_prefix_word_count > 0,
+        has_recent_same_focus_entry: false,
+        recommended_session_action_is_replace: false,
+    }
+}
+
+fn earliest_strong_explicit_hypothesis(
+    edit_hypotheses: &[cleanup::EditHypothesis],
+) -> Option<&cleanup::EditHypothesis> {
+    edit_hypotheses
+        .iter()
+        .filter(|hypothesis| {
+            hypothesis.strength == cleanup::EditSignalStrength::Strong
+                && matches!(
+                    hypothesis.match_source,
+                    cleanup::EditHypothesisMatchSource::Exact
+                        | cleanup::EditHypothesisMatchSource::Alias
+                )
+        })
+        .min_by_key(|hypothesis| hypothesis.word_start)
+}
+
+fn courtesy_prefix_word_count(words: &[&str]) -> usize {
+    match words {
+        ["my", "apologies"] => 2,
+        ["apologies"] | ["sorry"] => 1,
+        _ => 0,
+    }
 }
 
 fn has_strong_explicit_hypothesis(edit_hypotheses: &[cleanup::EditHypothesis]) -> bool {
@@ -1516,6 +1582,28 @@ mod tests {
                 .map(|candidate| candidate.kind),
             Some(RewriteCandidateKind::SpanReplacement)
         );
+    }
+
+    #[test]
+    fn courtesy_prefixed_opening_does_not_force_non_literal_recommendation() {
+        let transcript = Transcript {
+            raw_text: "my apologies i meant jonatan".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let rewrite = build_rewrite_transcript(&transcript, &rules());
+        assert!(rewrite.edit_context.cue_is_utterance_initial);
+        assert!(rewrite.edit_context.courtesy_prefix_detected);
+        assert_eq!(rewrite.edit_context.preceding_content_word_count, 0);
+        assert_eq!(
+            rewrite
+                .rewrite_candidates
+                .first()
+                .map(|candidate| candidate.kind),
+            Some(RewriteCandidateKind::Literal)
+        );
+        assert!(rewrite.recommended_candidate.is_none());
     }
 
     #[test]
