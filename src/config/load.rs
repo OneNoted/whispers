@@ -26,6 +26,7 @@ impl Config {
 
         config.apply_legacy_transcription_migration(&contents, &config_path);
         config.apply_legacy_cleanup_migration(&contents, &config_path);
+        config.apply_legacy_agentic_rewrite_migration(&contents, &config_path);
         config.apply_cloud_sanitization();
         Ok(config)
     }
@@ -76,6 +77,41 @@ impl Config {
         }
     }
 
+    fn apply_legacy_agentic_rewrite_migration(&mut self, contents: &str, config_path: &Path) {
+        let legacy_present = section_present(contents, "agentic_rewrite");
+        if !legacy_present {
+            return;
+        }
+
+        let rewrite_has_policy = table_key_present(contents, "rewrite", "policy_path");
+        let rewrite_has_glossary = table_key_present(contents, "rewrite", "glossary_path");
+        let rewrite_has_default_policy =
+            table_key_present(contents, "rewrite", "default_correction_policy");
+
+        if !rewrite_has_policy {
+            self.rewrite.policy_path = self.legacy_agentic_rewrite.policy_path.clone();
+        }
+        if !rewrite_has_glossary {
+            self.rewrite.glossary_path = self.legacy_agentic_rewrite.glossary_path.clone();
+        }
+        if !rewrite_has_default_policy {
+            self.rewrite.default_correction_policy =
+                self.legacy_agentic_rewrite.default_correction_policy;
+        }
+
+        if rewrite_has_policy || rewrite_has_glossary || rewrite_has_default_policy {
+            tracing::warn!(
+                "config {} contains deprecated [agentic_rewrite]; [rewrite] takes precedence",
+                config_path.display()
+            );
+        } else {
+            tracing::warn!(
+                "config {} uses deprecated [agentic_rewrite]; mapping fields to [rewrite]",
+                config_path.display()
+            );
+        }
+    }
+
     fn apply_cloud_sanitization(&mut self) {
         if self.transcription.local_backend == TranscriptionBackend::Cloud {
             tracing::warn!(
@@ -102,6 +138,14 @@ fn section_present(contents: &str, name: &str) -> bool {
     toml::from_str::<toml::Value>(contents)
         .ok()
         .and_then(|value| value.get(name).cloned())
+        .is_some()
+}
+
+fn table_key_present(contents: &str, table: &str, key: &str) -> bool {
+    toml::from_str::<toml::Value>(contents)
+        .ok()
+        .and_then(|value| value.get(table).cloned())
+        .and_then(|value| value.get(key).cloned())
         .is_some()
 }
 

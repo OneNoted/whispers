@@ -33,14 +33,14 @@ pub(super) fn maybe_create_agentic_starter_files(
     config_path: &Path,
     selections: &SetupSelections,
 ) -> Result<()> {
-    if selections.postprocess_mode != crate::config::PostprocessMode::AgenticRewrite {
+    if !selections.postprocess_mode.uses_rewrite() {
         return Ok(());
     }
 
     let config = config::Config::load(Some(config_path))?;
     let created = crate::agentic_rewrite::ensure_starter_files(&config)?;
     for path in created {
-        ui.print_info(format!("Created agentic rewrite starter file: {}", path));
+        ui.print_info(format!("Created rewrite starter file: {}", path));
     }
     Ok(())
 }

@@ -54,16 +54,9 @@ pub(super) fn choose_rewrite_model(
 }
 
 pub(super) fn choose_rewrite_mode(ui: &SetupUi) -> Result<PostprocessMode> {
-    let items = [
-        "advanced_local: smart rewrite cleanup with current bounded-candidate behavior",
-        "agentic_rewrite: app-aware rewrite with policy and technical glossary support",
-    ];
-    let selection = ui.select("Choose the rewrite mode", &items, 1)?;
-    Ok(if selection == 0 {
-        PostprocessMode::AdvancedLocal
-    } else {
-        PostprocessMode::AgenticRewrite
-    })
+    let items = ["rewrite: unified rewrite with app-aware policy and glossary support"];
+    let _selection = ui.select("Choose the rewrite mode", &items, 0)?;
+    Ok(PostprocessMode::Rewrite)
 }
 
 pub(super) fn configure_cloud(

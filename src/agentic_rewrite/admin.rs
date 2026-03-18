@@ -8,19 +8,19 @@ use super::{AppRule, ContextMatcher, GlossaryEntry, store};
 
 pub(super) fn print_app_rule_path(config_override: Option<&Path>) -> Result<()> {
     let config = Config::load(config_override)?;
-    println!("{}", config.resolved_agentic_policy_path().display());
+    println!("{}", config.resolved_rewrite_policy_path().display());
     Ok(())
 }
 
 pub(super) fn print_glossary_path(config_override: Option<&Path>) -> Result<()> {
     let config = Config::load(config_override)?;
-    println!("{}", config.resolved_agentic_glossary_path().display());
+    println!("{}", config.resolved_rewrite_glossary_path().display());
     Ok(())
 }
 
 pub(super) fn list_app_rules(config_override: Option<&Path>) -> Result<()> {
     let config = Config::load(config_override)?;
-    let rules = store::read_policy_file(&config.resolved_agentic_policy_path())?;
+    let rules = store::read_policy_file(&config.resolved_rewrite_policy_path())?;
     if rules.is_empty() {
         println!("No app rules configured.");
         return Ok(());
@@ -49,7 +49,7 @@ pub(super) fn add_app_rule(
     correction_policy: Option<RewriteCorrectionPolicy>,
 ) -> Result<()> {
     let config = Config::load(config_override)?;
-    let path = config.resolved_agentic_policy_path();
+    let path = config.resolved_rewrite_policy_path();
     let mut rules = store::read_policy_file(&path)?;
     store::upsert_app_rule(
         &mut rules,
@@ -68,7 +68,7 @@ pub(super) fn add_app_rule(
 
 pub(super) fn remove_app_rule(config_override: Option<&Path>, name: &str) -> Result<()> {
     let config = Config::load(config_override)?;
-    let path = config.resolved_agentic_policy_path();
+    let path = config.resolved_rewrite_policy_path();
     let mut rules = store::read_policy_file(&path)?;
     let removed = store::remove_app_rule_entry(&mut rules, name);
     store::write_policy_file(&path, &rules)?;
@@ -83,7 +83,7 @@ pub(super) fn remove_app_rule(config_override: Option<&Path>, name: &str) -> Res
 
 pub(super) fn list_glossary(config_override: Option<&Path>) -> Result<()> {
     let config = Config::load(config_override)?;
-    let entries = store::read_glossary_file(&config.resolved_agentic_glossary_path())?;
+    let entries = store::read_glossary_file(&config.resolved_rewrite_glossary_path())?;
     if entries.is_empty() {
         println!("No glossary entries configured.");
         return Ok(());
@@ -113,7 +113,7 @@ pub(super) fn add_glossary_entry(
     matcher: ContextMatcher,
 ) -> Result<()> {
     let config = Config::load(config_override)?;
-    let path = config.resolved_agentic_glossary_path();
+    let path = config.resolved_rewrite_glossary_path();
     let mut entries = store::read_glossary_file(&path)?;
     store::upsert_glossary_entry(
         &mut entries,
@@ -131,7 +131,7 @@ pub(super) fn add_glossary_entry(
 
 pub(super) fn remove_glossary_entry(config_override: Option<&Path>, term: &str) -> Result<()> {
     let config = Config::load(config_override)?;
-    let path = config.resolved_agentic_glossary_path();
+    let path = config.resolved_rewrite_glossary_path();
     let mut entries = store::read_glossary_file(&path)?;
     let removed = store::remove_glossary_entry_by_term(&mut entries, term);
     store::write_glossary_file(&path, &entries)?;

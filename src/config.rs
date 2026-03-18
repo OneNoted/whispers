@@ -13,9 +13,9 @@ pub use edit::{
 };
 pub use paths::{data_dir, default_config_path, expand_tilde, resolve_config_path};
 pub use schema::{
-    AgenticRewriteConfig, AudioConfig, CleanupConfig, CleanupProfile, CloudConfig,
-    CloudLanguageMode, CloudProvider, CloudRewriteConfig, CloudSettingsUpdate,
-    CloudTranscriptionConfig, Config, FeedbackConfig, InjectConfig, PersonalizationConfig,
-    PostprocessConfig, PostprocessMode, RewriteBackend, RewriteConfig, RewriteFallback,
-    SessionConfig, TranscriptionBackend, TranscriptionConfig, TranscriptionFallback,
+    AudioConfig, CleanupConfig, CleanupProfile, CloudConfig, CloudLanguageMode, CloudProvider,
+    CloudRewriteConfig, CloudSettingsUpdate, CloudTranscriptionConfig, Config, FeedbackConfig,
+    InjectConfig, PersonalizationConfig, PostprocessConfig, PostprocessMode, RewriteBackend,
+    RewriteConfig, RewriteFallback, SessionConfig, TranscriptionBackend, TranscriptionConfig,
+    TranscriptionFallback,
 };

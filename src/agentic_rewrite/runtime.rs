@@ -620,6 +620,7 @@ mod tests {
                 text: "type script and sir dee json".into(),
             }],
             recommended_candidate: None,
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         }
     }
@@ -862,6 +863,7 @@ mod tests {
                 text: "I'm currently using the window manager hyperland.".into(),
             }],
             recommended_candidate: None,
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         };
         hyperland_transcript.policy_context.correction_policy =
@@ -890,6 +892,7 @@ mod tests {
                 text: "I'm switching from Sui to Hyperland.".into(),
             }],
             recommended_candidate: None,
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         };
         switch_transcript.policy_context.correction_policy = RewriteCorrectionPolicy::Conservative;
@@ -920,6 +923,7 @@ mod tests {
                 text: "cargo clipy".into(),
             }],
             recommended_candidate: None,
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         };
         transcript.policy_context.correction_policy = RewriteCorrectionPolicy::Conservative;

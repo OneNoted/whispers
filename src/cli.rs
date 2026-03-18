@@ -62,7 +62,7 @@ pub enum Command {
         action: AsrModelAction,
     },
 
-    /// Manage local rewrite models used by advanced post-processing
+    /// Manage local rewrite models used by rewrite post-processing
     RewriteModel {
         #[command(subcommand)]
         action: RewriteModelAction,
@@ -80,7 +80,7 @@ pub enum Command {
         action: AppRuleAction,
     },
 
-    /// Manage technical glossary entries for agentic rewrite
+    /// Manage technical glossary entries for rewrite post-processing
     Glossary {
         #[command(subcommand)]
         action: GlossaryAction,

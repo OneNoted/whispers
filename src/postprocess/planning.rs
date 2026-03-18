@@ -21,7 +21,6 @@ pub(crate) struct RewritePlan {
     pub operation: FinalizedOperation,
     pub had_edit_cues: bool,
     pub recommended_candidate: Option<String>,
-    pub deterministic_replacement_text: Option<String>,
 }
 
 pub fn raw_text(transcript: &Transcript) -> String {
@@ -57,10 +56,18 @@ pub(crate) fn build_rewrite_plan(
     let local_model_path = resolve_rewrite_model_path(config);
     let mut rewrite_transcript = personalization::build_rewrite_transcript(transcript, &rules);
     rewrite_transcript.typing_context = typing_context.and_then(session::to_rewrite_typing_context);
-    if config.postprocess.mode == PostprocessMode::AgenticRewrite {
-        agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
-    }
+    agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
     let session_plan = session::build_backtrack_plan(&rewrite_transcript, recent_session);
+    rewrite_transcript.edit_context.has_recent_same_focus_entry = recent_session.is_some();
+    rewrite_transcript
+        .edit_context
+        .recommended_session_action_is_replace =
+        session_plan.recommended.as_ref().is_some_and(|candidate| {
+            matches!(
+                candidate.kind,
+                RewriteSessionBacktrackCandidateKind::ReplaceLastEntry
+            )
+        });
     rewrite_transcript.recent_session_entries = session_plan.recent_entries.clone();
     rewrite_transcript.session_backtrack_candidates = session_plan.candidates.clone();
     rewrite_transcript.recommended_session_candidate = session_plan.recommended.clone();
@@ -93,7 +100,6 @@ pub(crate) fn build_rewrite_plan(
                     .as_ref()
                     .map(|candidate| candidate.text.clone())
             }),
-        deterministic_replacement_text: session_plan.deterministic_replacement_text.clone(),
         rules,
         fallback_text,
         rewrite_transcript,
@@ -103,9 +109,7 @@ pub(crate) fn build_rewrite_plan(
 fn base_text(config: &Config, transcript: &Transcript) -> String {
     match config.postprocess.mode {
         PostprocessMode::LegacyBasic => cleanup::clean_transcript(transcript, &config.cleanup),
-        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
-            cleanup::correction_aware_text(transcript)
-        }
+        PostprocessMode::Rewrite => cleanup::correction_aware_text(transcript),
         PostprocessMode::Raw => raw_text(transcript),
     }
 }

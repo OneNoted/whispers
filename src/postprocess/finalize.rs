@@ -63,7 +63,7 @@ pub async fn finalize_transcript(
                 &rules,
             )
         }
-        PostprocessMode::AdvancedLocal | PostprocessMode::AgenticRewrite => {
+        PostprocessMode::Rewrite => {
             finalize_rewrite_plan_or_fallback(
                 config,
                 rewrite_service,
@@ -91,24 +91,6 @@ async fn finalize_rewrite_plan_or_fallback(
     rewrite_service: Option<&RewriteService>,
     plan: planning::RewritePlan,
 ) -> FinalizedTranscript {
-    if let Some(text) = plan.deterministic_replacement_text.clone() {
-        tracing::debug!(
-            output_len = text.len(),
-            mode = config.postprocess.mode.as_str(),
-            "using deterministic session replacement"
-        );
-        return finalize_plain_text(
-            text,
-            SessionRewriteSummary {
-                had_edit_cues: plan.had_edit_cues,
-                rewrite_used: false,
-                recommended_candidate: plan.recommended_candidate.clone(),
-            },
-            &plan.rules,
-        )
-        .with_operation(plan.operation.clone());
-    }
-
     let local_rewrite_available = crate::rewrite::local_rewrite_available();
     let local_backend_requested = config.rewrite.backend == RewriteBackend::Local;
 
@@ -209,16 +191,12 @@ impl FinalizedTranscript {
 }
 
 fn rewrite_output_accepted(
-    config: &Config,
+    _config: &Config,
     rewrite_transcript: &RewriteTranscript,
     text: &str,
 ) -> bool {
     if text.trim().is_empty() {
         return false;
-    }
-
-    if config.postprocess.mode != PostprocessMode::AgenticRewrite {
-        return true;
     }
 
     match rewrite_transcript.policy_context.correction_policy {
@@ -267,6 +245,7 @@ mod tests {
                     text: "allowed rewrite".into(),
                 }],
                 recommended_candidate: None,
+                edit_context: Default::default(),
                 policy_context: RewritePolicyContext::default(),
             },
             custom_instructions: None,
@@ -274,38 +253,13 @@ mod tests {
             operation: FinalizedOperation::Append,
             had_edit_cues: false,
             recommended_candidate: Some("allowed rewrite".into()),
-            deterministic_replacement_text: None,
         }
-    }
-
-    #[tokio::test]
-    async fn deterministic_session_replacement_bypasses_rewrite_and_preserves_replace_operation() {
-        let config = plan_config(PostprocessMode::AdvancedLocal, RewriteBackend::Local);
-        let mut plan = rewrite_plan();
-        plan.operation = FinalizedOperation::ReplaceLastEntry {
-            entry_id: 7,
-            delete_graphemes: 4,
-        };
-        plan.deterministic_replacement_text = Some("deterministic replacement".into());
-        plan.local_model_path = None;
-
-        let finalized = finalize_rewrite_plan_or_fallback(&config, None, plan).await;
-
-        assert_eq!(finalized.text, "deterministic replacement");
-        assert_eq!(
-            finalized.operation,
-            FinalizedOperation::ReplaceLastEntry {
-                entry_id: 7,
-                delete_graphemes: 4,
-            }
-        );
-        assert!(!finalized.rewrite_summary.rewrite_used);
     }
 
     #[tokio::test]
     #[cfg(not(feature = "local-rewrite"))]
     async fn local_rewrite_unavailable_build_falls_back_to_plain_text() {
-        let config = plan_config(PostprocessMode::AdvancedLocal, RewriteBackend::Local);
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Local);
         let mut plan = rewrite_plan();
         plan.operation = FinalizedOperation::ReplaceLastEntry {
             entry_id: 11,
@@ -328,7 +282,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "local-rewrite")]
     async fn missing_local_model_falls_back_to_plain_text() {
-        let config = plan_config(PostprocessMode::AdvancedLocal, RewriteBackend::Local);
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Local);
         let mut plan = rewrite_plan();
         plan.local_model_path = None;
 
@@ -340,7 +294,7 @@ mod tests {
 
     #[test]
     fn conservative_agentic_rejection_falls_back_to_precomputed_text() {
-        let mut config = plan_config(PostprocessMode::AgenticRewrite, RewriteBackend::Cloud);
+        let mut config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
         config.rewrite.fallback = RewriteFallback::None;
         let mut plan = rewrite_plan();
         plan.rewrite_transcript.policy_context.correction_policy =

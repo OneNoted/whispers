@@ -40,7 +40,6 @@ pub fn build_backtrack_plan(
         recent_entries: vec![to_rewrite_session_entry(&recent_entry.entry)],
         candidates: vec![replace_candidate.clone(), append_candidate],
         recommended: Some(replace_candidate),
-        deterministic_replacement_text: preferred_current_text_for_exact_followup(transcript),
     }
 }
 
@@ -110,52 +109,6 @@ fn preferred_current_text(transcript: &RewriteTranscript) -> String {
         .or_else(|| Some(transcript.raw_text.trim()).filter(|text: &&str| !text.is_empty()))
         .unwrap_or_default()
         .to_string()
-}
-
-fn preferred_current_text_for_exact_followup(transcript: &RewriteTranscript) -> Option<String> {
-    if let Some(text) = cleanup::explicit_followup_replacement(&transcript.raw_text) {
-        return Some(text);
-    }
-
-    if !has_strong_explicit_followup_cue(transcript) {
-        return None;
-    }
-
-    let raw_prefix = normalize_prefix(&transcript.raw_text);
-    if ![
-        "scratch that",
-        "actually scratch that",
-        "never mind",
-        "nevermind",
-        "actually never mind",
-        "actually nevermind",
-        "oh wait never mind",
-        "oh wait nevermind",
-        "forget that",
-    ]
-    .iter()
-    .any(|cue| raw_prefix.starts_with(cue))
-    {
-        return None;
-    }
-
-    let preferred = preferred_current_text(transcript);
-    (!preferred.is_empty()).then_some(preferred)
-}
-
-fn has_strong_explicit_followup_cue(transcript: &RewriteTranscript) -> bool {
-    transcript.edit_hypotheses.iter().any(|hypothesis| {
-        hypothesis.strength == crate::rewrite_protocol::RewriteEditSignalStrength::Strong
-            && matches!(
-                hypothesis.match_source,
-                crate::rewrite_protocol::RewriteEditHypothesisMatchSource::Exact
-                    | crate::rewrite_protocol::RewriteEditHypothesisMatchSource::Alias
-            )
-            && matches!(
-                hypothesis.cue_family.as_str(),
-                "scratch_that" | "never_mind"
-            )
-    })
 }
 
 fn normalize_prefix(text: &str) -> String {
@@ -237,6 +190,7 @@ mod tests {
                 kind: RewriteCandidateKind::SentenceReplacement,
                 text: "Hi".into(),
             }),
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         };
 
@@ -272,7 +226,6 @@ mod tests {
                 .and_then(|candidate| candidate.entry_id),
             Some(7)
         );
-        assert_eq!(plan.deterministic_replacement_text.as_deref(), Some("Hi"));
     }
 
     #[test]
@@ -292,6 +245,7 @@ mod tests {
             edit_hypotheses: Vec::new(),
             rewrite_candidates: Vec::new(),
             recommended_candidate: None,
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         };
 
@@ -319,6 +273,5 @@ mod tests {
             plan.recommended.as_ref().map(|candidate| candidate.kind),
             Some(RewriteSessionBacktrackCandidateKind::ReplaceLastEntry)
         );
-        assert_eq!(plan.deterministic_replacement_text.as_deref(), Some("Hi"));
     }
 }

@@ -72,6 +72,7 @@ fn correction_transcript() -> RewriteTranscript {
             kind: RewriteCandidateKind::Literal,
             text: "Hi there, this is a test. Wait, no. Hi there.".into(),
         }),
+        edit_context: Default::default(),
         policy_context: RewritePolicyContext::default(),
     }
 }
@@ -105,6 +106,7 @@ fn candidate_only_transcript() -> RewriteTranscript {
             },
         ],
         recommended_candidate: None,
+        edit_context: Default::default(),
         policy_context: RewritePolicyContext::default(),
     }
 }
@@ -141,6 +143,7 @@ fn fast_agentic_transcript() -> RewriteTranscript {
             },
         ],
         recommended_candidate: None,
+        edit_context: Default::default(),
         policy_context: RewritePolicyContext {
             correction_policy: RewriteCorrectionPolicy::Balanced,
             matched_rule_names: vec!["baseline/global-default".into()],
@@ -250,12 +253,10 @@ fn cue_prompt_includes_raw_candidate_and_signals() {
     assert!(prompt.contains("tail_shape: phrase"));
     assert!(prompt.contains("Candidate interpretations"));
     assert!(prompt.contains("A strong explicit spoken edit cue was detected"));
-    assert!(
-        prompt.contains(
-            "The candidate list is ordered from most likely to least likely by heuristics."
-        )
-    );
-    assert!(prompt.contains("the first candidate is the heuristic best guess"));
+    assert!(prompt.contains("The candidate list is ordered heuristically and may be wrong"));
+    assert!(prompt.contains(
+        "When an exact strong edit cue is present, treat non-literal candidates as evidence, not an automatic winner."
+    ));
     assert!(prompt.contains("Recommended interpretation:"));
     assert!(prompt.contains(
         "Use this as the default final text unless another candidate is clearly better."
@@ -271,6 +272,7 @@ fn cue_prompt_includes_raw_candidate_and_signals() {
     assert!(prompt.contains("trigger: \"wait no\""));
     assert!(prompt.contains("Structured edit intents"));
     assert!(prompt.contains("replace_previous_sentence"));
+    assert!(prompt.contains("Structured cue context"));
     assert!(prompt.contains("Choose the best candidate interpretation"));
     assert!(prompt.contains("Candidate interpretations:\n"));
     assert!(prompt.contains("Correction candidate:\nHi there."));
@@ -327,6 +329,7 @@ fn user_message_includes_recent_segments_when_correction_matches_raw() {
             text: "Hi there.".into(),
         }],
         recommended_candidate: None,
+        edit_context: Default::default(),
         policy_context: RewritePolicyContext::default(),
     };
 
@@ -359,6 +362,7 @@ fn effective_max_tokens_scales_with_transcript_length() {
             text: "hi there".into(),
         }],
         recommended_candidate: None,
+        edit_context: Default::default(),
         policy_context: RewritePolicyContext::default(),
     };
     assert_eq!(effective_max_tokens(256, &short), 48);
@@ -381,6 +385,7 @@ fn effective_max_tokens_scales_with_transcript_length() {
             text: "word ".repeat(80),
         }],
         recommended_candidate: None,
+        edit_context: Default::default(),
         policy_context: RewritePolicyContext::default(),
     };
     assert_eq!(effective_max_tokens(256, &long), 184);
@@ -448,6 +453,7 @@ fn session_prompt_includes_recent_entry_and_context() {
             kind: RewriteCandidateKind::SentenceReplacement,
             text: "Hi".into(),
         }),
+        edit_context: Default::default(),
         policy_context: RewritePolicyContext::default(),
     };
 

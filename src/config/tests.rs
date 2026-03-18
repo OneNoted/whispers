@@ -168,7 +168,7 @@ fn update_rewrite_selection_enables_advanced_mode() {
         .expect("select rewrite model");
 
     let loaded = Config::load(Some(&config_path)).expect("load config");
-    assert_eq!(loaded.postprocess.mode, PostprocessMode::AdvancedLocal);
+    assert_eq!(loaded.postprocess.mode, PostprocessMode::Rewrite);
     assert_eq!(loaded.rewrite.selected_model, "qwen-3.5-2b-q4_k_m");
     assert!(loaded.rewrite.model_path.is_empty());
     assert_eq!(
@@ -215,7 +215,7 @@ language = "auto"
         TranscriptionBackend::WhisperCpp
     );
     assert_eq!(loaded.transcription.selected_model, "large-v3-turbo");
-    assert_eq!(loaded.postprocess.mode, PostprocessMode::AdvancedLocal);
+    assert_eq!(loaded.postprocess.mode, PostprocessMode::Rewrite);
     assert_eq!(loaded.rewrite.selected_model, "qwen-3.5-4b-q4_k_m");
 
     let raw = std::fs::read_to_string(&config_path).expect("read upgraded config");
@@ -236,6 +236,47 @@ api_key_env = "sk-test-inline"
     let loaded = Config::load(Some(&path)).expect("load config");
     assert_eq!(loaded.cloud.api_key, "sk-test-inline");
     assert_eq!(loaded.cloud.api_key_env, "OPENAI_API_KEY");
+}
+
+#[test]
+fn load_deprecated_rewrite_modes_normalizes_to_rewrite() {
+    for mode in ["advanced_local", "agentic_rewrite"] {
+        let path = crate::test_support::unique_temp_path(&format!("config-mode-{mode}"), "toml");
+        std::fs::write(
+            &path,
+            format!(
+                r#"[postprocess]
+mode = "{mode}"
+"#
+            ),
+        )
+        .expect("write config");
+
+        let loaded = Config::load(Some(&path)).expect("load config");
+        assert_eq!(loaded.postprocess.mode, PostprocessMode::Rewrite);
+    }
+}
+
+#[test]
+fn load_legacy_agentic_rewrite_section_maps_into_rewrite_fields() {
+    let path = crate::test_support::unique_temp_path("config-agentic-legacy", "toml");
+    std::fs::write(
+        &path,
+        r#"[agentic_rewrite]
+policy_path = "/tmp/policy.toml"
+glossary_path = "/tmp/glossary.toml"
+default_correction_policy = "aggressive"
+"#,
+    )
+    .expect("write config");
+
+    let loaded = Config::load(Some(&path)).expect("load config");
+    assert_eq!(loaded.rewrite.policy_path, "/tmp/policy.toml");
+    assert_eq!(loaded.rewrite.glossary_path, "/tmp/glossary.toml");
+    assert_eq!(
+        loaded.rewrite.default_correction_policy,
+        crate::rewrite_protocol::RewriteCorrectionPolicy::Aggressive
+    );
 }
 
 #[test]
