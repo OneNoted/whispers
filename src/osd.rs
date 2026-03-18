@@ -8,7 +8,7 @@ use std::process::{ChildStdin, Command, Stdio};
 #[cfg(feature = "osd")]
 use crate::branding;
 #[cfg(feature = "osd")]
-use crate::osd_protocol::{OsdEvent, VoiceOsdUpdate};
+use crate::osd_protocol::OsdEvent;
 
 pub enum OsdMode {
     Meter,
@@ -56,7 +56,7 @@ impl OsdHandle {
         }
     }
 
-    pub fn send_voice_update(&mut self, update: &VoiceOsdUpdate) {
+    pub fn send_voice_update(&mut self, update: &crate::osd_protocol::VoiceOsdUpdate) {
         #[cfg(feature = "osd")]
         {
             let Some(stdin) = self.stdin.as_mut() else {

@@ -67,7 +67,7 @@ font8x8 = { version = "0.3", optional = true }
 fontdue = { version = "0.9", optional = true }
 
 [features]
-default = ["osd"]
+default = ["cuda", "osd"]
 cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
 osd = [
     "dep:wayland-client",

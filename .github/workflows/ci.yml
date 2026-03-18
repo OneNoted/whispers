@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  lint-and-test-default:
+  lint-and-test-portable:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,11 +29,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy (default features)
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy (CPU-only OSD build)
+        run: cargo clippy --all-targets --no-default-features --features osd -- -D warnings
 
-      - name: Test (default features)
-        run: cargo test
+      - name: Test (CPU-only OSD build)
+        run: cargo test --no-default-features --features osd
 
   feature-checks:
     runs-on: ubuntu-latest
@@ -55,13 +55,26 @@ jobs:
       - name: Check no default features
         run: cargo check --no-default-features
 
-      - name: Check osd feature only
+      - name: Check CPU-only OSD feature set
         run: cargo check --no-default-features --features osd
 
-      - name: Verify package (default publish surface)
-        run: cargo package --locked
+      - name: Verify package
+        run: |
+          if command -v nvcc >/dev/null 2>&1; then
+            cargo package --locked
+          else
+            cargo package --locked --no-verify
+          fi
 
-      - name: Check cuda feature only (if toolkit available)
+      - name: Check default feature set (if toolkit available)
+        run: |
+          if command -v nvcc >/dev/null 2>&1; then
+            cargo check
+          else
+            echo "CUDA toolkit not available on this runner; skipping default feature check"
+          fi
+
+      - name: Check CUDA-only feature set (if toolkit available)
         run: |
           if command -v nvcc >/dev/null 2>&1; then
             cargo check --no-default-features --features cuda

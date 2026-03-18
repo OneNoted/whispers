@@ -52,26 +52,26 @@ For file transcription, `whispers transcribe --raw <file>` always prints the pla
 ### From crates.io
 
 ```sh
-# Default install: CPU build with Wayland OSD
+# Default install: CUDA build with Wayland OSD
 cargo install whispers
 
-# Enable CUDA acceleration explicitly
-cargo install whispers --features cuda
+# CPU-only build with Wayland OSD
+cargo install whispers --no-default-features --features osd
 
-# Build without the OSD overlay
+# CPU-only build without the OSD overlay
 cargo install whispers --no-default-features
 ```
 
 ### From git
 
 ```sh
-# Default install: CPU build with Wayland OSD
+# Default install: CUDA build with Wayland OSD
 cargo install --git https://github.com/OneNoted/whispers
 
-# Enable CUDA acceleration explicitly
-cargo install --git https://github.com/OneNoted/whispers --features cuda
+# CPU-only build with Wayland OSD
+cargo install --git https://github.com/OneNoted/whispers --no-default-features --features osd
 
-# Build without the OSD overlay
+# CPU-only build without the OSD overlay
 cargo install --git https://github.com/OneNoted/whispers --no-default-features
 ```
 
