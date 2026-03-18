@@ -609,23 +609,68 @@ mod tests {
         config.voice.live_rewrite = true;
 
         let rendered = render_status(&config_path, true, &config);
-        assert!(rendered.contains("Config\n------"));
-        assert!(rendered.contains("source                   config file"));
-        assert!(rendered.contains("backend                  whisper_cpp"));
-        assert!(rendered.contains("model_status             ready"));
-        assert!(rendered.contains("mode                     agentic_rewrite"));
-        assert!(rendered.contains("default_correction_policy balanced"));
-        assert!(rendered.contains("api_key                  env:WHISPERS_STATUS_TEST_KEY (set)"));
-        assert!(rendered.contains("live_inject              yes"));
-        assert!(rendered.contains("live_rewrite             yes"));
+        assert!(rendered.contains("Whispers status"));
+        assert!(rendered.contains(&crate::ui::section("Config")));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("source"),
+            style_value(ValueStyle::Status, "config file")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("backend"),
+            style_value(ValueStyle::Backend, "whisper_cpp")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("model_status"),
+            style_value(ValueStyle::Status, "ready")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("mode"),
+            style_value(ValueStyle::Value, "agentic_rewrite")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("default_correction_policy"),
+            style_value(ValueStyle::Value, "balanced")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("api_key"),
+            style_value(ValueStyle::Status, "env:WHISPERS_STATUS_TEST_KEY (set)")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("live_inject"),
+            style_value(ValueStyle::Boolean, "yes")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("live_rewrite"),
+            style_value(ValueStyle::Boolean, "yes")
+        )));
     }
 
     #[test]
     fn render_status_marks_missing_optional_files() {
         let config = Config::default();
         let rendered = render_status(Path::new("/tmp/whispers-status.toml"), false, &config);
-        assert!(rendered.contains("source                   defaults (config file missing)"));
-        assert!(rendered.contains("policy_status            missing"));
-        assert!(rendered.contains("glossary_status          missing"));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("source"),
+            style_value(ValueStyle::Status, "defaults (config file missing)")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("policy_status"),
+            style_value(ValueStyle::Status, "missing")
+        )));
+        assert!(rendered.contains(&format!(
+            "{}: {}",
+            crate::ui::summary_key("glossary_status"),
+            style_value(ValueStyle::Status, "missing")
+        )));
     }
 }

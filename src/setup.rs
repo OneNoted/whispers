@@ -219,9 +219,11 @@ fn apply_cloud_settings(ui: &SetupUi, config_path: &Path, cloud: &CloudSetup) ->
 }
 
 fn apply_voice_selection(ui: &SetupUi, config_path: &Path, voice: &VoiceSetup) -> Result<()> {
-    let mut voice_config = VoiceConfig::default();
-    voice_config.live_inject = voice.enabled && voice.live_inject;
-    voice_config.live_rewrite = voice.enabled && voice.live_rewrite;
+    let voice_config = VoiceConfig {
+        live_inject: voice.enabled && voice.live_inject,
+        live_rewrite: voice.enabled && voice.live_rewrite,
+        ..Default::default()
+    };
     config::update_config_voice_settings(config_path, &voice_config)?;
 
     if !voice.enabled {

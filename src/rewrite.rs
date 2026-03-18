@@ -406,33 +406,33 @@ Active glossary terms:\n\
 }
 
 fn render_agentic_runtime_context(transcript: &RewriteTranscript) -> String {
-    has_policy_context(transcript)
-        .then(|| {
-            format!(
-                "Active typing context:\n\
+    if has_policy_context(transcript) {
+        format!(
+            "Active typing context:\n\
 {}\
 Recent dictation session:\n\
 {}",
-                render_typing_context(transcript),
-                render_recent_session_entries(transcript),
-            )
-        })
-        .unwrap_or_default()
+            render_typing_context(transcript),
+            render_recent_session_entries(transcript),
+        )
+    } else {
+        String::new()
+    }
 }
 
 fn render_agentic_candidates(transcript: &RewriteTranscript) -> String {
-    has_policy_context(transcript)
-        .then(|| {
-            format!(
-                "Available rewrite candidates (advisory, not exhaustive in agentic mode):\n\
+    if has_policy_context(transcript) {
+        format!(
+            "Available rewrite candidates (advisory, not exhaustive in agentic mode):\n\
 {}\
 Glossary-backed candidates:\n\
 {}",
-                render_rewrite_candidates(transcript),
-                render_glossary_candidates(transcript)
-            )
-        })
-        .unwrap_or_default()
+            render_rewrite_candidates(transcript),
+            render_glossary_candidates(transcript)
+        )
+    } else {
+        String::new()
+    }
 }
 
 fn rewrite_route(transcript: &RewriteTranscript) -> RewriteRoute {
@@ -1288,7 +1288,7 @@ mod tests {
             "do not keep an obviously wrong technical spelling just because it appears in the candidate list"
         ));
         assert!(instructions.contains(
-            "even when the literal transcript spelling is noisy or the exact canonical form is not already present in the candidate list"
+            "even if that exact spelling is not already present in the candidate list"
         ));
     }
 

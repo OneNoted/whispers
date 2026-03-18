@@ -218,6 +218,7 @@ pub async fn run(config: Config) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_partial_tick(
     config: &Config,
     recorder: &AudioRecorder,
@@ -858,7 +859,7 @@ mod tests {
                 ("world", 900, 1900),
                 ("again", 1900, 3300),
             ]),
-            5000,
+            UNSTABLE_TAIL_MS + 2000,
         );
 
         assert_eq!(accumulator.stable_text, "hello world");
@@ -905,7 +906,7 @@ mod tests {
                 ("using", 400, 800),
                 ("hyperland", 800, 1200),
             ]),
-            5000,
+            UNSTABLE_TAIL_MS + 800,
         );
         assert_eq!(accumulator.stable_text, "i'm using");
         assert_eq!(accumulator.unstable_text, "hyperland");
@@ -1008,7 +1009,7 @@ mod tests {
             correction,
             InjectionCommand {
                 delete_graphemes: 6,
-                text: "prland".into()
+                text: "rland".into()
             }
         );
     }

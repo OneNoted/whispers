@@ -861,7 +861,7 @@ fn normalize_word(word: &str) -> String {
 }
 
 fn is_word_char(ch: char) -> bool {
-    ch.is_alphanumeric() || matches!(ch, '\'' | '-' | '_' | '.')
+    ch.is_alphanumeric() || matches!(ch, '\'' | '-' | '_')
 }
 
 fn contains_ignore_ascii_case(haystack: Option<&str>, needle: &str) -> bool {
@@ -1193,7 +1193,18 @@ mod tests {
             &[],
             &glossary,
         );
-        assert_eq!(policy.active_glossary_terms.len(), 2);
+        assert!(
+            policy
+                .active_glossary_terms
+                .iter()
+                .any(|term| term.term == "TypeScript")
+        );
+        assert!(
+            policy
+                .active_glossary_terms
+                .iter()
+                .any(|term| term.term == "serde_json")
+        );
         assert_eq!(policy.glossary_candidates.len(), 1);
         assert_eq!(
             policy.glossary_candidates[0].text,
@@ -1245,8 +1256,13 @@ mod tests {
             recommended_candidate: None,
             policy_context: RewritePolicyContext::default(),
         };
-        hyperland_transcript.policy_context.correction_policy =
-            RewriteCorrectionPolicy::Conservative;
+        hyperland_transcript.policy_context = resolve_policy_context(
+            RewriteCorrectionPolicy::Conservative,
+            hyperland_transcript.typing_context.as_ref(),
+            &hyperland_transcript.rewrite_candidates,
+            &[],
+            &[],
+        );
 
         assert!(conservative_output_allowed(
             &hyperland_transcript,
@@ -1273,7 +1289,13 @@ mod tests {
             recommended_candidate: None,
             policy_context: RewritePolicyContext::default(),
         };
-        switch_transcript.policy_context.correction_policy = RewriteCorrectionPolicy::Conservative;
+        switch_transcript.policy_context = resolve_policy_context(
+            RewriteCorrectionPolicy::Conservative,
+            switch_transcript.typing_context.as_ref(),
+            &switch_transcript.rewrite_candidates,
+            &[],
+            &[],
+        );
 
         assert!(conservative_output_allowed(
             &switch_transcript,

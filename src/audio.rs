@@ -220,7 +220,7 @@ pub fn preprocess_audio(samples: &mut Vec<f32>, sample_rate: u32) {
     );
 }
 
-pub fn preprocess_live_audio(samples: &mut Vec<f32>, sample_rate: u32) {
+pub fn preprocess_live_audio(samples: &mut [f32], sample_rate: u32) {
     if samples.is_empty() || sample_rate == 0 {
         return;
     }

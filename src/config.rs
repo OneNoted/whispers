@@ -897,7 +897,11 @@ pub fn update_config_rewrite_selection(config_path: &Path, selected_model: &str)
         .map_err(|e| WhsprError::Config(format!("failed to parse config: {e}")))?;
 
     ensure_standard_postprocess_tables(&mut doc);
-    let mode = match doc["postprocess"]["mode"].as_str() {
+    let mode = match doc["postprocess"]
+        .as_table_like()
+        .and_then(|table| table.get("mode"))
+        .and_then(|item| item.as_str())
+    {
         Some("agentic_rewrite") => PostprocessMode::AgenticRewrite,
         _ => PostprocessMode::AdvancedLocal,
     };

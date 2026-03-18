@@ -953,6 +953,7 @@ fn text_width(text: &str, px_size: f32) -> u32 {
     sanitized.chars().count() as u32 * glyph_w
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_text(
     pixels: &mut [u8],
     w: u32,
@@ -1020,6 +1021,7 @@ fn draw_text(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_bitmap_char(
     pixels: &mut [u8],
     w: u32,
