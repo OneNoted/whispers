@@ -184,6 +184,46 @@ fn update_rewrite_selection_enables_advanced_mode() {
 }
 
 #[test]
+fn update_rewrite_selection_preserves_policy_settings() {
+    let config_path =
+        crate::test_support::unique_temp_path("config-rewrite-policy-preserve", "toml");
+    std::fs::write(
+        &config_path,
+        r#"[postprocess]
+mode = "rewrite"
+
+[rewrite]
+backend = "local"
+fallback = "local"
+selected_model = "qwen-3.5-4b-q4_k_m"
+model_path = ""
+instructions_path = "~/.local/share/whispers/rewrite-instructions.txt"
+profile = "auto"
+timeout_ms = 30000
+idle_timeout_ms = 120000
+max_output_chars = 1200
+max_tokens = 256
+policy_path = "/tmp/custom-policy.toml"
+glossary_path = "/tmp/custom-glossary.toml"
+default_correction_policy = "aggressive"
+"#,
+    )
+    .expect("write config");
+
+    update_config_rewrite_selection(&config_path, "qwen-3.5-2b-q4_k_m")
+        .expect("select rewrite model");
+
+    let loaded = Config::load(Some(&config_path)).expect("load config");
+    assert_eq!(loaded.rewrite.selected_model, "qwen-3.5-2b-q4_k_m");
+    assert_eq!(loaded.rewrite.policy_path, "/tmp/custom-policy.toml");
+    assert_eq!(loaded.rewrite.glossary_path, "/tmp/custom-glossary.toml");
+    assert_eq!(
+        loaded.rewrite.default_correction_policy,
+        crate::rewrite_protocol::RewriteCorrectionPolicy::Aggressive
+    );
+}
+
+#[test]
 fn update_helpers_upgrade_legacy_configs_without_panicking() {
     let config_path = crate::test_support::unique_temp_path("config-legacy-upgrade", "toml");
     std::fs::write(

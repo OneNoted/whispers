@@ -2,7 +2,6 @@ use std::path::Path;
 
 use crate::error::{Result, WhsprError};
 use crate::rewrite_profile::RewriteProfile;
-use crate::rewrite_protocol::RewriteCorrectionPolicy;
 
 use super::{
     CloudSettingsUpdate, PostprocessMode, RewriteBackend, RewriteFallback, TranscriptionBackend,
@@ -240,11 +239,6 @@ pub fn update_config_rewrite_selection(config_path: &Path, selected_model: &str)
     doc["rewrite"]["idle_timeout_ms"] = toml_edit::value(120000);
     doc["rewrite"]["max_output_chars"] = toml_edit::value(1200);
     doc["rewrite"]["max_tokens"] = toml_edit::value(256);
-    doc["rewrite"]["policy_path"] = toml_edit::value(crate::agentic_rewrite::default_policy_path());
-    doc["rewrite"]["glossary_path"] =
-        toml_edit::value(crate::agentic_rewrite::default_glossary_path());
-    doc["rewrite"]["default_correction_policy"] =
-        toml_edit::value(RewriteCorrectionPolicy::Balanced.as_str());
 
     std::fs::write(config_path, doc.to_string())
         .map_err(|e| WhsprError::Config(format!("failed to write config: {e}")))?;
