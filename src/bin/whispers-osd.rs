@@ -469,27 +469,10 @@ fn render_frame(
 }
 
 fn render_meter_overlay(pixels: &mut [u8], w: u32, h: u32, bars: &BarState) {
-    let shell_x = 8;
-    let shell_y = 10;
-    let shell_w = w.saturating_sub(shell_x * 2);
-    let shell_h = h.saturating_sub(shell_y * 2 + 2);
-    let shell_radius = shell_h / 2;
-
-    draw_surface_shell(
-        pixels,
-        w,
-        h,
-        shell_x,
-        shell_y,
-        shell_w,
-        shell_h,
-        shell_radius,
-    );
-
-    let track_x = shell_x + 14;
-    let track_y = shell_y + 10;
-    let track_w = shell_w.saturating_sub(28);
-    let track_h = shell_h.saturating_sub(20);
+    let track_x = 22;
+    let track_y = 20;
+    let track_w = w.saturating_sub(track_x * 2);
+    let track_h = h.saturating_sub(track_y * 2 + 2);
     draw_track_shell(
         pixels,
         w,
