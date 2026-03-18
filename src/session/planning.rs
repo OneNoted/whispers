@@ -14,11 +14,12 @@ pub fn build_backtrack_plan(
     let Some(recent_entry) = recent_entry else {
         return SessionBacktrackPlan::default();
     };
-    if !should_offer_session_backtrack(transcript) {
+    let explicit_followup_text = cleanup::explicit_followup_replacement(&transcript.raw_text);
+    if !should_offer_session_backtrack(transcript, explicit_followup_text.as_deref()) {
         return SessionBacktrackPlan::default();
     }
 
-    let append_text = preferred_current_text(transcript);
+    let append_text = preferred_current_text(transcript, explicit_followup_text.as_deref());
     if append_text.is_empty() {
         return SessionBacktrackPlan::default();
     }
@@ -54,8 +55,11 @@ pub fn to_rewrite_typing_context(context: &TypingContext) -> Option<RewriteTypin
     })
 }
 
-fn should_offer_session_backtrack(transcript: &RewriteTranscript) -> bool {
-    if cleanup::explicit_followup_replacement(&transcript.raw_text).is_some() {
+fn should_offer_session_backtrack(
+    transcript: &RewriteTranscript,
+    explicit_followup_text: Option<&str>,
+) -> bool {
+    if explicit_followup_text.is_some() {
         return true;
     }
 
@@ -97,12 +101,17 @@ fn should_offer_session_backtrack(transcript: &RewriteTranscript) -> bool {
     })
 }
 
-fn preferred_current_text(transcript: &RewriteTranscript) -> String {
+fn preferred_current_text(
+    transcript: &RewriteTranscript,
+    explicit_followup_text: Option<&str>,
+) -> String {
     transcript
         .recommended_candidate
         .as_ref()
         .map(|candidate| candidate.text.trim())
         .filter(|text: &&str| !text.is_empty())
+        .or(explicit_followup_text)
+        .filter(|text: &&str| !text.trim().is_empty())
         .or_else(|| {
             Some(transcript.correction_aware_text.trim()).filter(|text: &&str| !text.is_empty())
         })
@@ -272,6 +281,59 @@ mod tests {
         assert_eq!(
             plan.recommended.as_ref().map(|candidate| candidate.kind),
             Some(RewriteSessionBacktrackCandidateKind::ReplaceLastEntry)
+        );
+    }
+
+    #[test]
+    fn build_backtrack_plan_uses_explicit_followup_replacement_for_alias_fallbacks() {
+        let transcript = RewriteTranscript {
+            raw_text: "srajvat, hi".into(),
+            correction_aware_text: "srajvat, hi".into(),
+            aggressive_correction_text: None,
+            detected_language: None,
+            typing_context: None,
+            recent_session_entries: Vec::new(),
+            session_backtrack_candidates: Vec::new(),
+            recommended_session_candidate: None,
+            segments: Vec::new(),
+            edit_intents: Vec::new(),
+            edit_signals: Vec::new(),
+            edit_hypotheses: Vec::new(),
+            rewrite_candidates: Vec::new(),
+            recommended_candidate: None,
+            edit_context: Default::default(),
+            policy_context: RewritePolicyContext::default(),
+        };
+
+        let recent = EligibleSessionEntry {
+            entry: SessionEntry {
+                id: 7,
+                final_text: "Hello there".into(),
+                grapheme_len: 11,
+                injected_at_ms: 1,
+                focus_fingerprint: "hyprland:0x123".into(),
+                surface_kind: SurfaceKind::GenericText,
+                app_id: Some("firefox".into()),
+                window_title: Some("Example".into()),
+                rewrite_summary: SessionRewriteSummary {
+                    had_edit_cues: false,
+                    rewrite_used: true,
+                    recommended_candidate: Some("Hello there".into()),
+                },
+            },
+            delete_graphemes: 11,
+        };
+
+        let plan = build_backtrack_plan(&transcript, Some(&recent));
+        assert_eq!(
+            plan.recommended.as_ref().map(|candidate| candidate.kind),
+            Some(RewriteSessionBacktrackCandidateKind::ReplaceLastEntry)
+        );
+        assert_eq!(
+            plan.recommended
+                .as_ref()
+                .map(|candidate| candidate.text.as_str()),
+            Some("Hi")
         );
     }
 }

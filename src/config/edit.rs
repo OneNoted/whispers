@@ -334,9 +334,7 @@ fn ensure_standard_postprocess_tables(doc: &mut toml_edit::DocumentMut) {
 
 fn normalize_postprocess_mode(doc: &mut toml_edit::DocumentMut) {
     let current = doc["postprocess"]["mode"].as_str().unwrap_or_default();
-    if matches!(current, "advanced_local" | "agentic_rewrite") {
-        doc["postprocess"]["mode"] = toml_edit::value(PostprocessMode::Rewrite.as_str());
-    } else if !matches!(current, "raw" | "rewrite" | "legacy_basic") {
+    if !matches!(current, "raw" | "rewrite" | "legacy_basic") {
         doc["postprocess"]["mode"] = toml_edit::value(PostprocessMode::Rewrite.as_str());
     }
 }

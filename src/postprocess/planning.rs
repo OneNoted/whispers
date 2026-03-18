@@ -52,12 +52,24 @@ pub(crate) fn build_rewrite_plan(
     recent_session: Option<&EligibleSessionEntry>,
 ) -> RewritePlan {
     let rules = load_runtime_rules(config);
-    let fallback_text = base_text(config, transcript);
     let local_model_path = resolve_rewrite_model_path(config);
     let mut rewrite_transcript = personalization::build_rewrite_transcript(transcript, &rules);
     rewrite_transcript.typing_context = typing_context.and_then(session::to_rewrite_typing_context);
     agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
     let session_plan = session::build_backtrack_plan(&rewrite_transcript, recent_session);
+    let mut fallback_text = base_text(config, transcript);
+    if session_plan.recommended.as_ref().is_some_and(|candidate| {
+        matches!(
+            candidate.kind,
+            RewriteSessionBacktrackCandidateKind::ReplaceLastEntry
+        )
+    }) {
+        if let Some(explicit_followup_text) =
+            cleanup::explicit_followup_replacement(&rewrite_transcript.raw_text)
+        {
+            fallback_text = explicit_followup_text;
+        }
+    }
     rewrite_transcript.edit_context.has_recent_same_focus_entry = recent_session.is_some();
     rewrite_transcript
         .edit_context
@@ -129,4 +141,55 @@ fn recommended_operation(rewrite_transcript: &RewriteTranscript) -> FinalizedOpe
             })
         })
         .unwrap_or(FinalizedOperation::Append)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_rewrite_plan;
+    use crate::config::{Config, PostprocessMode};
+    use crate::context::SurfaceKind;
+    use crate::postprocess::finalize::FinalizedOperation;
+    use crate::session::{EligibleSessionEntry, SessionEntry, SessionRewriteSummary};
+    use crate::transcribe::Transcript;
+
+    #[test]
+    fn build_rewrite_plan_uses_explicit_followup_replacement_for_replace_fallback() {
+        let mut config = Config::default();
+        config.postprocess.mode = PostprocessMode::Rewrite;
+
+        let transcript = Transcript {
+            raw_text: "srajvat, hi".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+        let recent = EligibleSessionEntry {
+            entry: SessionEntry {
+                id: 7,
+                final_text: "Hello there".into(),
+                grapheme_len: 11,
+                injected_at_ms: 1,
+                focus_fingerprint: "hyprland:0x123".into(),
+                surface_kind: SurfaceKind::GenericText,
+                app_id: Some("firefox".into()),
+                window_title: Some("Example".into()),
+                rewrite_summary: SessionRewriteSummary {
+                    had_edit_cues: false,
+                    rewrite_used: true,
+                    recommended_candidate: Some("Hello there".into()),
+                },
+            },
+            delete_graphemes: 11,
+        };
+
+        let plan = build_rewrite_plan(&config, &transcript, None, Some(&recent));
+        assert_eq!(plan.fallback_text, "Hi");
+        assert_eq!(plan.recommended_candidate.as_deref(), Some("Hi"));
+        assert_eq!(
+            plan.operation,
+            FinalizedOperation::ReplaceLastEntry {
+                entry_id: 7,
+                delete_graphemes: 11,
+            }
+        );
+    }
 }
