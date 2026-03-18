@@ -46,6 +46,7 @@ const BG_R: u8 = 15;
 const BG_G: u8 = 16;
 const BG_B: u8 = 24;
 const BG_A: u8 = 160;
+const METER_BG_A: u8 = 56;
 const BORDER_R: u8 = 200;
 const BORDER_G: u8 = 215;
 const BORDER_B: u8 = 255;
@@ -447,7 +448,26 @@ fn render_frame(
     mode: OverlayMode,
     voice_state: Option<&VoiceOverlayState>,
 ) {
-    if matches!(mode, OverlayMode::Voice) {
+    let shell_alpha = match mode {
+        OverlayMode::Meter => METER_BG_A,
+        OverlayMode::Voice => BG_A,
+    };
+    render_overlay_shell(pixels, w, h, shell_alpha);
+
+    match mode {
+        OverlayMode::Meter => render_meter_overlay(pixels, w, h, bars),
+        OverlayMode::Voice => render_voice_overlay(
+            pixels,
+            w,
+            h,
+            bars,
+            voice_state.unwrap_or(&VoiceOverlayState::default()),
+        ),
+    }
+}
+
+fn render_overlay_shell(pixels: &mut [u8], w: u32, h: u32, fill_alpha: u8) {
+    if fill_alpha > 0 {
         draw_rounded_rect(
             pixels,
             w,
@@ -460,33 +480,22 @@ fn render_frame(
             BG_R,
             BG_G,
             BG_B,
-            BG_A,
+            fill_alpha,
         );
-        draw_rounded_border(
-            pixels,
-            w,
-            h,
-            CORNER_RADIUS,
-            BORDER_WIDTH,
-            BORDER_R,
-            BORDER_G,
-            BORDER_B,
-            BORDER_A,
-        );
-        for x in (CORNER_RADIUS + 2)..(w.saturating_sub(CORNER_RADIUS + 2)) {
-            set_pixel_blend(pixels, w, h, x, 1, 255, 255, 255, 12);
-        }
     }
-
-    match mode {
-        OverlayMode::Meter => render_meter_overlay(pixels, w, h, bars),
-        OverlayMode::Voice => render_voice_overlay(
-            pixels,
-            w,
-            h,
-            bars,
-            voice_state.unwrap_or(&VoiceOverlayState::default()),
-        ),
+    draw_rounded_border(
+        pixels,
+        w,
+        h,
+        CORNER_RADIUS,
+        BORDER_WIDTH,
+        BORDER_R,
+        BORDER_G,
+        BORDER_B,
+        BORDER_A,
+    );
+    for x in (CORNER_RADIUS + 2)..(w.saturating_sub(CORNER_RADIUS + 2)) {
+        set_pixel_blend(pixels, w, h, x, 1, 255, 255, 255, 12);
     }
 }
 
