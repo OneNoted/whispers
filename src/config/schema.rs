@@ -14,7 +14,8 @@ pub struct Config {
     pub session: SessionConfig,
     pub personalization: PersonalizationConfig,
     pub rewrite: RewriteConfig,
-    pub agentic_rewrite: AgenticRewriteConfig,
+    #[serde(default, rename = "agentic_rewrite")]
+    pub(crate) legacy_agentic_rewrite: LegacyAgenticRewriteConfig,
     pub cloud: CloudConfig,
     pub cleanup: CleanupConfig,
     pub inject: InjectConfig,
@@ -80,8 +81,8 @@ pub struct PostprocessConfig {
 pub enum PostprocessMode {
     #[default]
     Raw,
-    AdvancedLocal,
-    AgenticRewrite,
+    #[serde(alias = "advanced_local", alias = "agentic_rewrite")]
+    Rewrite,
     LegacyBasic,
 }
 
@@ -114,11 +115,14 @@ pub struct RewriteConfig {
     pub idle_timeout_ms: u64,
     pub max_output_chars: usize,
     pub max_tokens: usize,
+    pub policy_path: String,
+    pub glossary_path: String,
+    pub default_correction_policy: RewriteCorrectionPolicy,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct AgenticRewriteConfig {
+pub(crate) struct LegacyAgenticRewriteConfig {
     pub policy_path: String,
     pub glossary_path: String,
     pub default_correction_policy: RewriteCorrectionPolicy,
@@ -283,14 +287,13 @@ impl PostprocessMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Raw => "raw",
-            Self::AdvancedLocal => "advanced_local",
-            Self::AgenticRewrite => "agentic_rewrite",
+            Self::Rewrite => "rewrite",
             Self::LegacyBasic => "legacy_basic",
         }
     }
 
     pub fn uses_rewrite(self) -> bool {
-        matches!(self, Self::AdvancedLocal | Self::AgenticRewrite)
+        matches!(self, Self::Rewrite)
     }
 }
 
@@ -363,11 +366,14 @@ impl Default for RewriteConfig {
             idle_timeout_ms: 120000,
             max_output_chars: 1200,
             max_tokens: 256,
+            policy_path: crate::agentic_rewrite::default_policy_path().into(),
+            glossary_path: crate::agentic_rewrite::default_glossary_path().into(),
+            default_correction_policy: RewriteCorrectionPolicy::Balanced,
         }
     }
 }
 
-impl Default for AgenticRewriteConfig {
+impl Default for LegacyAgenticRewriteConfig {
     fn default() -> Self {
         Self {
             policy_path: crate::agentic_rewrite::default_policy_path().into(),

@@ -18,6 +18,8 @@ pub struct RewriteTranscript {
     pub rewrite_candidates: Vec<RewriteCandidate>,
     pub recommended_candidate: Option<RewriteCandidate>,
     #[serde(default)]
+    pub edit_context: RewriteEditContext,
+    #[serde(default)]
     pub policy_context: RewritePolicyContext,
 }
 
@@ -88,6 +90,15 @@ pub struct RewriteEditHypothesis {
 pub struct RewriteCandidate {
     pub kind: RewriteCandidateKind,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RewriteEditContext {
+    pub cue_is_utterance_initial: bool,
+    pub preceding_content_word_count: usize,
+    pub courtesy_prefix_detected: bool,
+    pub has_recent_same_focus_entry: bool,
+    pub recommended_session_action_is_replace: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

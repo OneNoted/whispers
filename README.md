@@ -51,9 +51,6 @@ whispers setup
 
 # one-shot dictation
 whispers
-
-# live mode
-whispers voice
 ```
 
 Default config path:
@@ -86,9 +83,8 @@ bindsym $mod+Alt+d exec whispers
 # setup
 whispers setup
 
-# dictation
+# one-shot dictation
 whispers
-whispers voice
 whispers transcribe audio.wav
 
 # ASR models

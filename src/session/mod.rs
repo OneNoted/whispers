@@ -40,5 +40,4 @@ pub struct SessionBacktrackPlan {
     pub recent_entries: Vec<RewriteSessionEntry>,
     pub candidates: Vec<RewriteSessionBacktrackCandidate>,
     pub recommended: Option<RewriteSessionBacktrackCandidate>,
-    pub deterministic_replacement_text: Option<String>,
 }

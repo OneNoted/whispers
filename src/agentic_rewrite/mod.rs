@@ -57,12 +57,12 @@ pub fn default_glossary_path() -> &'static str {
 }
 
 pub fn apply_runtime_policy(config: &Config, transcript: &mut RewriteTranscript) {
-    let policy_rules = store::load_policy_file_for_runtime(&config.resolved_agentic_policy_path());
+    let policy_rules = store::load_policy_file_for_runtime(&config.resolved_rewrite_policy_path());
     let glossary_entries =
-        store::load_glossary_file_for_runtime(&config.resolved_agentic_glossary_path());
+        store::load_glossary_file_for_runtime(&config.resolved_rewrite_glossary_path());
 
     let policy_context = runtime::resolve_policy_context(
-        config.agentic_rewrite.default_correction_policy,
+        config.rewrite.default_correction_policy,
         transcript.typing_context.as_ref(),
         &transcript.rewrite_candidates,
         &policy_rules,
@@ -175,6 +175,7 @@ mod tests {
                 text: "type script and sir dee json".into(),
             }],
             recommended_candidate: None,
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         }
     }
@@ -193,7 +194,7 @@ mod tests {
         crate::test_support::remove_env("XDG_DATA_HOME");
 
         let config = Config::default();
-        let glossary_path = config.resolved_agentic_glossary_path();
+        let glossary_path = config.resolved_rewrite_glossary_path();
         store::write_glossary_file(
             &glossary_path,
             &[GlossaryEntry {
@@ -242,7 +243,7 @@ mod tests {
         )
         .expect("add app rule");
         let config = Config::load(None).expect("config");
-        let rules = store::read_policy_file(&config.resolved_agentic_policy_path()).expect("rules");
+        let rules = store::read_policy_file(&config.resolved_rewrite_policy_path()).expect("rules");
         assert_eq!(rules.len(), 1);
 
         add_glossary_entry(
@@ -253,15 +254,15 @@ mod tests {
         )
         .expect("add glossary entry");
         let entries =
-            store::read_glossary_file(&config.resolved_agentic_glossary_path()).expect("entries");
+            store::read_glossary_file(&config.resolved_rewrite_glossary_path()).expect("entries");
         assert_eq!(entries.len(), 1);
 
         remove_app_rule(None, "zed").expect("remove app rule");
         remove_glossary_entry(None, "serde_json").expect("remove glossary entry");
 
-        let rules = store::read_policy_file(&config.resolved_agentic_policy_path()).expect("rules");
+        let rules = store::read_policy_file(&config.resolved_rewrite_policy_path()).expect("rules");
         let entries =
-            store::read_glossary_file(&config.resolved_agentic_glossary_path()).expect("entries");
+            store::read_glossary_file(&config.resolved_rewrite_glossary_path()).expect("entries");
         assert!(rules.is_empty());
         assert!(entries.is_empty());
     }

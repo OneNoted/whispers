@@ -80,6 +80,14 @@ impl Config {
             .then(|| PathBuf::from(expand_tilde(&self.rewrite.instructions_path)))
     }
 
+    pub fn resolved_rewrite_policy_path(&self) -> PathBuf {
+        PathBuf::from(expand_tilde(&self.rewrite.policy_path))
+    }
+
+    pub fn resolved_rewrite_glossary_path(&self) -> PathBuf {
+        PathBuf::from(expand_tilde(&self.rewrite.glossary_path))
+    }
+
     pub fn resolved_dictionary_path(&self) -> PathBuf {
         PathBuf::from(expand_tilde(&self.personalization.dictionary_path))
     }
@@ -89,10 +97,10 @@ impl Config {
     }
 
     pub fn resolved_agentic_policy_path(&self) -> PathBuf {
-        PathBuf::from(expand_tilde(&self.agentic_rewrite.policy_path))
+        self.resolved_rewrite_policy_path()
     }
 
     pub fn resolved_agentic_glossary_path(&self) -> PathBuf {
-        PathBuf::from(expand_tilde(&self.agentic_rewrite.glossary_path))
+        self.resolved_rewrite_glossary_path()
     }
 }

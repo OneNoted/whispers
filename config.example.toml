@@ -33,7 +33,7 @@ flash_attn = true
 idle_timeout_ms = 120000
 
 [postprocess]
-# "raw" (default), "advanced_local", "agentic_rewrite", or "legacy_basic" for deprecated cleanup configs
+# "raw" (default), "rewrite", or "legacy_basic" for deprecated cleanup configs
 mode = "raw"
 
 [session]
@@ -59,7 +59,7 @@ snippet_trigger = "insert"
 backend = "local"
 # Cloud fallback behavior ("local" or "none")
 fallback = "local"
-# Managed rewrite model name for advanced_local mode
+# Managed rewrite model name for rewrite mode
 selected_model = "qwen-3.5-4b-q4_k_m"
 # Manual GGUF path override (empty = use selected managed model)
 # Custom rewrite models should be chat-capable GGUFs with an embedded
@@ -77,11 +77,9 @@ idle_timeout_ms = 120000
 max_output_chars = 1200
 # Maximum tokens to generate for rewritten output
 max_tokens = 256
-
-[agentic_rewrite]
-# App-aware rewrite policy rules used by postprocess.mode = "agentic_rewrite"
+# App-aware rewrite policy rules used by postprocess.mode = "rewrite"
 policy_path = "~/.local/share/whispers/app-rewrite-policy.toml"
-# Technical glossary used by postprocess.mode = "agentic_rewrite"
+# Technical glossary used by postprocess.mode = "rewrite"
 glossary_path = "~/.local/share/whispers/technical-glossary.toml"
 # Default correction policy ("conservative", "balanced", or "aggressive")
 default_correction_policy = "balanced"

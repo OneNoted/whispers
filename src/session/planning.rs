@@ -14,11 +14,12 @@ pub fn build_backtrack_plan(
     let Some(recent_entry) = recent_entry else {
         return SessionBacktrackPlan::default();
     };
-    if !should_offer_session_backtrack(transcript) {
+    let explicit_followup_text = cleanup::explicit_followup_replacement(&transcript.raw_text);
+    if !should_offer_session_backtrack(transcript, explicit_followup_text.as_deref()) {
         return SessionBacktrackPlan::default();
     }
 
-    let append_text = preferred_current_text(transcript);
+    let append_text = preferred_current_text(transcript, explicit_followup_text.as_deref());
     if append_text.is_empty() {
         return SessionBacktrackPlan::default();
     }
@@ -40,7 +41,6 @@ pub fn build_backtrack_plan(
         recent_entries: vec![to_rewrite_session_entry(&recent_entry.entry)],
         candidates: vec![replace_candidate.clone(), append_candidate],
         recommended: Some(replace_candidate),
-        deterministic_replacement_text: preferred_current_text_for_exact_followup(transcript),
     }
 }
 
@@ -55,8 +55,11 @@ pub fn to_rewrite_typing_context(context: &TypingContext) -> Option<RewriteTypin
     })
 }
 
-fn should_offer_session_backtrack(transcript: &RewriteTranscript) -> bool {
-    if cleanup::explicit_followup_replacement(&transcript.raw_text).is_some() {
+fn should_offer_session_backtrack(
+    transcript: &RewriteTranscript,
+    explicit_followup_text: Option<&str>,
+) -> bool {
+    if explicit_followup_text.is_some() {
         return true;
     }
 
@@ -98,64 +101,23 @@ fn should_offer_session_backtrack(transcript: &RewriteTranscript) -> bool {
     })
 }
 
-fn preferred_current_text(transcript: &RewriteTranscript) -> String {
+fn preferred_current_text(
+    transcript: &RewriteTranscript,
+    explicit_followup_text: Option<&str>,
+) -> String {
     transcript
         .recommended_candidate
         .as_ref()
         .map(|candidate| candidate.text.trim())
         .filter(|text: &&str| !text.is_empty())
+        .or(explicit_followup_text)
+        .filter(|text: &&str| !text.trim().is_empty())
         .or_else(|| {
             Some(transcript.correction_aware_text.trim()).filter(|text: &&str| !text.is_empty())
         })
         .or_else(|| Some(transcript.raw_text.trim()).filter(|text: &&str| !text.is_empty()))
         .unwrap_or_default()
         .to_string()
-}
-
-fn preferred_current_text_for_exact_followup(transcript: &RewriteTranscript) -> Option<String> {
-    if let Some(text) = cleanup::explicit_followup_replacement(&transcript.raw_text) {
-        return Some(text);
-    }
-
-    if !has_strong_explicit_followup_cue(transcript) {
-        return None;
-    }
-
-    let raw_prefix = normalize_prefix(&transcript.raw_text);
-    if ![
-        "scratch that",
-        "actually scratch that",
-        "never mind",
-        "nevermind",
-        "actually never mind",
-        "actually nevermind",
-        "oh wait never mind",
-        "oh wait nevermind",
-        "forget that",
-    ]
-    .iter()
-    .any(|cue| raw_prefix.starts_with(cue))
-    {
-        return None;
-    }
-
-    let preferred = preferred_current_text(transcript);
-    (!preferred.is_empty()).then_some(preferred)
-}
-
-fn has_strong_explicit_followup_cue(transcript: &RewriteTranscript) -> bool {
-    transcript.edit_hypotheses.iter().any(|hypothesis| {
-        hypothesis.strength == crate::rewrite_protocol::RewriteEditSignalStrength::Strong
-            && matches!(
-                hypothesis.match_source,
-                crate::rewrite_protocol::RewriteEditHypothesisMatchSource::Exact
-                    | crate::rewrite_protocol::RewriteEditHypothesisMatchSource::Alias
-            )
-            && matches!(
-                hypothesis.cue_family.as_str(),
-                "scratch_that" | "never_mind"
-            )
-    })
 }
 
 fn normalize_prefix(text: &str) -> String {
@@ -237,6 +199,7 @@ mod tests {
                 kind: RewriteCandidateKind::SentenceReplacement,
                 text: "Hi".into(),
             }),
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         };
 
@@ -272,7 +235,6 @@ mod tests {
                 .and_then(|candidate| candidate.entry_id),
             Some(7)
         );
-        assert_eq!(plan.deterministic_replacement_text.as_deref(), Some("Hi"));
     }
 
     #[test]
@@ -292,6 +254,7 @@ mod tests {
             edit_hypotheses: Vec::new(),
             rewrite_candidates: Vec::new(),
             recommended_candidate: None,
+            edit_context: Default::default(),
             policy_context: RewritePolicyContext::default(),
         };
 
@@ -319,6 +282,58 @@ mod tests {
             plan.recommended.as_ref().map(|candidate| candidate.kind),
             Some(RewriteSessionBacktrackCandidateKind::ReplaceLastEntry)
         );
-        assert_eq!(plan.deterministic_replacement_text.as_deref(), Some("Hi"));
+    }
+
+    #[test]
+    fn build_backtrack_plan_uses_explicit_followup_replacement_for_alias_fallbacks() {
+        let transcript = RewriteTranscript {
+            raw_text: "srajvat, hi".into(),
+            correction_aware_text: "srajvat, hi".into(),
+            aggressive_correction_text: None,
+            detected_language: None,
+            typing_context: None,
+            recent_session_entries: Vec::new(),
+            session_backtrack_candidates: Vec::new(),
+            recommended_session_candidate: None,
+            segments: Vec::new(),
+            edit_intents: Vec::new(),
+            edit_signals: Vec::new(),
+            edit_hypotheses: Vec::new(),
+            rewrite_candidates: Vec::new(),
+            recommended_candidate: None,
+            edit_context: Default::default(),
+            policy_context: RewritePolicyContext::default(),
+        };
+
+        let recent = EligibleSessionEntry {
+            entry: SessionEntry {
+                id: 7,
+                final_text: "Hello there".into(),
+                grapheme_len: 11,
+                injected_at_ms: 1,
+                focus_fingerprint: "hyprland:0x123".into(),
+                surface_kind: SurfaceKind::GenericText,
+                app_id: Some("firefox".into()),
+                window_title: Some("Example".into()),
+                rewrite_summary: SessionRewriteSummary {
+                    had_edit_cues: false,
+                    rewrite_used: true,
+                    recommended_candidate: Some("Hello there".into()),
+                },
+            },
+            delete_graphemes: 11,
+        };
+
+        let plan = build_backtrack_plan(&transcript, Some(&recent));
+        assert_eq!(
+            plan.recommended.as_ref().map(|candidate| candidate.kind),
+            Some(RewriteSessionBacktrackCandidateKind::ReplaceLastEntry)
+        );
+        assert_eq!(
+            plan.recommended
+                .as_ref()
+                .map(|candidate| candidate.text.as_str()),
+            Some("Hi")
+        );
     }
 }

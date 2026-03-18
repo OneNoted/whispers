@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Config, PostprocessMode};
+use crate::config::Config;
 use crate::error::{Result, WhsprError};
 
 use super::{AppRule, GlossaryEntry};
@@ -10,7 +10,7 @@ use super::{AppRule, GlossaryEntry};
 const DEFAULT_POLICY_PATH: &str = "~/.local/share/whispers/app-rewrite-policy.toml";
 const DEFAULT_GLOSSARY_PATH: &str = "~/.local/share/whispers/technical-glossary.toml";
 
-const POLICY_STARTER: &str = r#"# App-aware rewrite policy for whispers agentic_rewrite mode.
+const POLICY_STARTER: &str = r#"# App-aware rewrite policy for whispers rewrite mode.
 # Rules are layered, not first-match. Matching rules apply in this order:
 # global defaults, surface_kind, app_id, window_title_contains, browser_domain_contains.
 # Later, more specific rules override earlier fields.
@@ -35,7 +35,7 @@ const POLICY_STARTER: &str = r#"# App-aware rewrite policy for whispers agentic_
 # instructions = "Preserve identifiers, filenames, snake_case, camelCase, and Rust terminology."
 "#;
 
-const GLOSSARY_STARTER: &str = r#"# Technical glossary for whispers agentic_rewrite mode.
+const GLOSSARY_STARTER: &str = r#"# Technical glossary for whispers rewrite mode.
 # Each entry defines a canonical term plus likely spoken or mis-transcribed aliases.
 #
 # Uncomment and edit the examples below.
@@ -77,17 +77,17 @@ pub(super) fn default_glossary_path() -> &'static str {
 }
 
 pub(super) fn ensure_starter_files(config: &Config) -> Result<Vec<String>> {
-    if config.postprocess.mode != PostprocessMode::AgenticRewrite {
+    if !config.postprocess.mode.uses_rewrite() {
         return Ok(Vec::new());
     }
 
     let mut created = Vec::new();
-    let policy_path = config.resolved_agentic_policy_path();
+    let policy_path = config.resolved_rewrite_policy_path();
     if ensure_text_file(&policy_path, POLICY_STARTER)? {
         created.push(policy_path.display().to_string());
     }
 
-    let glossary_path = config.resolved_agentic_glossary_path();
+    let glossary_path = config.resolved_rewrite_glossary_path();
     if ensure_text_file(&glossary_path, GLOSSARY_STARTER)? {
         created.push(glossary_path.display().to_string());
     }
