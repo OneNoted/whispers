@@ -119,5 +119,7 @@ whispers completions zsh
 
 Project code in this repository is licensed under the [MIT License](LICENSE).
 
-Bundled third-party code under `vendor/whisper-rs-sys` is also MIT-licensed.
-See [NOTICE](NOTICE) and the vendor license files for details.
+Bundled third-party code under `vendor/whisper-rs-sys` carries upstream
+license notices and file-level exceptions. See [NOTICE](NOTICE), the vendor
+license files, and the relevant per-file headers under
+`vendor/whisper-rs-sys/whisper.cpp`.

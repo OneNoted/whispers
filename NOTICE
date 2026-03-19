@@ -2,5 +2,8 @@ Project code in this repository is licensed under the MIT License; see
 LICENSE.
 
 Bundled third-party code under vendor/whisper-rs-sys retains its upstream
-MIT licenses. See vendor/whisper-rs-sys/LICENSE and
-vendor/whisper-rs-sys/whisper.cpp/LICENSE.
+license notices and file-level exceptions. See vendor/whisper-rs-sys/LICENSE,
+vendor/whisper-rs-sys/whisper.cpp/LICENSE, the Apache-2.0 WITH LLVM-exception
+headers under vendor/whisper-rs-sys/whisper.cpp/ggml/include and
+vendor/whisper-rs-sys/whisper.cpp/ggml/src/ggml-sycl, and the BSD notice in
+vendor/whisper-rs-sys/whisper.cpp/cmake/FindFFmpeg.cmake.
