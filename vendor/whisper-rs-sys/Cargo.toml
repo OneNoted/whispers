@@ -26,6 +26,7 @@ include = [
     "whisper.cpp/ggml/CMakeLists.txt",
     "whisper.cpp/ggml/src/**",
     "whisper.cpp/ggml/include/*.h",
+    "LICENSE",
     "whisper.cpp/LICENSE",
     "src/*.rs",
     "build.rs",
@@ -39,7 +40,7 @@ autobenches = false
 description = "Rust bindings for whisper.cpp (FFI bindings)"
 documentation = "https://docs.rs/whisper-rs-sys"
 readme = false
-license = "Unlicense"
+license = "MIT"
 repository = "https://codeberg.org/tazz4843/whisper-rs"
 
 [features]
