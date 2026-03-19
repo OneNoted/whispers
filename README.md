@@ -117,4 +117,7 @@ whispers completions zsh
 
 ## License
 
-[Mozilla Public License 2.0](LICENSE)
+Project code in this repository is licensed under the [MIT License](LICENSE).
+
+Bundled third-party code under `vendor/whisper-rs-sys` is also MIT-licensed.
+See [NOTICE](NOTICE) and the vendor license files for details.
