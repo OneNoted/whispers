@@ -72,7 +72,7 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
 }
 
 async fn run_default(cli: &Cli) -> Result<()> {
-    let Some(_pid_lock) = runtime_support::acquire_or_signal_lock()? else {
+    let Some(pid_lock) = runtime_support::acquire_or_signal_lock()? else {
         return Ok(());
     };
 
@@ -83,7 +83,7 @@ async fn run_default(cli: &Cli) -> Result<()> {
     asr::validation::validate_transcription_config(&config)?;
     tracing::debug!("config loaded: {config:?}");
 
-    app::run(config).await
+    app::run(config, pid_lock).await
 }
 
 #[tokio::main]

@@ -6,8 +6,11 @@ use crate::config::{Config, PostprocessMode};
 use crate::context::TypingContext;
 use crate::personalization::{self, PersonalizationRules};
 use crate::rewrite_model;
-use crate::rewrite_protocol::{RewriteSessionBacktrackCandidateKind, RewriteTranscript};
+use crate::rewrite_protocol::{
+    RewriteCandidateKind, RewriteSessionBacktrackCandidateKind, RewriteTranscript,
+};
 use crate::session::{self, EligibleSessionEntry};
+use crate::structured_text;
 use crate::transcribe::Transcript;
 
 use super::finalize::FinalizedOperation;
@@ -58,6 +61,24 @@ pub(crate) fn build_rewrite_plan(
     agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
     let session_plan = session::build_backtrack_plan(&rewrite_transcript, recent_session);
     let mut fallback_text = base_text(config, transcript);
+    if let Some(candidate) = rewrite_transcript
+        .rewrite_candidates
+        .iter()
+        .find(|candidate| candidate.kind == RewriteCandidateKind::StructuredLiteral)
+    {
+        let candidate_text = candidate.text.as_str();
+        let prefer_structured_fallback = [
+            Some(transcript.raw_text.as_str()),
+            Some(rewrite_transcript.correction_aware_text.as_str()),
+            rewrite_transcript.aggressive_correction_text.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|text| structured_text::output_matches_candidate(text, candidate_text));
+        if prefer_structured_fallback {
+            fallback_text = candidate.text.clone();
+        }
+    }
     if session_plan.recommended.as_ref().is_some_and(|candidate| {
         matches!(
             candidate.kind,
@@ -190,6 +211,39 @@ mod tests {
                 entry_id: 7,
                 delete_graphemes: 11,
             }
+        );
+    }
+
+    #[test]
+    fn build_rewrite_plan_prefers_structured_literal_for_fallback() {
+        let mut config = Config::default();
+        config.postprocess.mode = PostprocessMode::Rewrite;
+
+        let transcript = Transcript {
+            raw_text: "portfolio. Notes. Supply is the URL".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let plan = build_rewrite_plan(&config, &transcript, None, None);
+        assert_eq!(plan.fallback_text, "portfolio.notes.supply");
+    }
+
+    #[test]
+    fn build_rewrite_plan_keeps_full_fallback_when_structured_text_is_embedded() {
+        let mut config = Config::default();
+        config.postprocess.mode = PostprocessMode::Rewrite;
+
+        let transcript = Transcript {
+            raw_text: "Check portfolio. Notes. Supply tomorrow".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let plan = build_rewrite_plan(&config, &transcript, None, None);
+        assert_eq!(
+            plan.fallback_text,
+            "Check portfolio. Notes. Supply tomorrow"
         );
     }
 }

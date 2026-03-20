@@ -141,7 +141,9 @@ word. Use nearby category words like window manager, editor, language, library, 
 tool to disambiguate technical names. When a dictated word is an obvious phonetic near-miss for a likely technical term \
 and the surrounding context clearly identifies the category, correct it to the canonical technical spelling instead of \
 echoing the miss. If multiple plausible interpretations remain similarly credible, stay close to the transcript rather \
-than inventing a niche term. \
+than inventing a niche term. When the utterance is a hostname, URL, email address, or other structured text, preserve \
+dots, slashes, colons, dashes, underscores, and at-signs literally. Do not turn structured labels into sentence \
+punctuation and do not append explanatory prose such as saying something is a URL. \
 If an edit intent says to replace or cancel previous wording, preserve that edit when the utterance or same-session \
 context clearly supports it. Preserve utterance-initial courtesy or apology wording when the raw transcript still \
 clearly intends it. Examples:\n\
@@ -175,7 +177,12 @@ phonetically similar common word. Use nearby category words like window manager,
 manager, shell, or terminal tool to disambiguate technical names. When a dictated word is an obvious phonetic near-miss \
 for a likely technical term and the surrounding context clearly identifies the category, correct it to the canonical \
 technical spelling instead of echoing the miss. If multiple plausible interpretations remain similarly credible, stay \
-close to the transcript rather than inventing a niche term. If an edit intent says to replace or cancel previous wording, preserve that edit when the utterance or same-session context clearly supports it. Preserve utterance-initial courtesy or apology wording when the raw transcript still clearly intends it. Examples:\n\
+close to the transcript rather than inventing a niche term. When the utterance is a hostname, URL, email address, or \
+other structured text, preserve dots, slashes, colons, dashes, underscores, and at-signs literally. Do not turn \
+structured labels into sentence punctuation and do not append explanatory prose such as saying something is a URL. If \
+an edit intent says to replace or cancel previous wording, preserve that edit when the utterance or same-session \
+context clearly supports it. Preserve utterance-initial courtesy or apology wording when the raw transcript still \
+clearly intends it. Examples:\n\
 - raw: Hello there. Scratch that. Hi.\n  correction-aware: Hi.\n  final: Hi.\n\
 - raw: I'll bring cookies, scratch that, brownies.\n  correction-aware: I'll bring brownies.\n  final: I'll bring brownies.\n\
 - raw: My name is Notes, scratch that my name is Jonatan.\n  correction-aware: My my name is Jonatan.\n  aggressive correction-aware: My name is Jonatan.\n  final: My name is Jonatan.\n\
@@ -320,7 +327,8 @@ Structured cue context:\n\
 Self-corrections were already resolved before rewriting.\n\
 Use this correction-aware transcript as the main source text. In agentic mode, you may still normalize likely \
 technical terms or proper names when the utterance strongly supports them, even if the exact canonical spelling is not \
-already present in the candidate list:\n\
+already present in the candidate list. When a structured-text candidate is present, preserve its punctuation literally \
+and do not rewrite it into prose:\n\
 {correction_aware}\n\
 {agentic_candidates}\
 Do not restore any canceled wording from earlier in the utterance.\n\
@@ -342,7 +350,8 @@ Correction-aware transcript:\n\
 {correction_aware}\n\
 Treat the correction-aware transcript as authoritative for explicit spoken edits and overall meaning, but in agentic \
 mode you may normalize likely technical terms or proper names when category cues in the utterance make the intended \
-technical meaning clearly better than the literal transcript.\n\
+technical meaning clearly better than the literal transcript. When a structured-text candidate is present, preserve \
+its punctuation literally and do not rewrite it into prose.\n\
 {agentic_candidates}\
 \
 Recent segments:\n\
@@ -554,6 +563,9 @@ fn render_rewrite_candidates(transcript: &RewriteTranscript) -> String {
         let kind = match candidate.kind {
             crate::rewrite_protocol::RewriteCandidateKind::Literal => {
                 "literal (keep only if the cue was not actually an edit)"
+            }
+            crate::rewrite_protocol::RewriteCandidateKind::StructuredLiteral => {
+                "structured_literal (preserve structured punctuation literally)"
             }
             crate::rewrite_protocol::RewriteCandidateKind::ConservativeCorrection => {
                 "conservative_correction (balanced cleanup)"

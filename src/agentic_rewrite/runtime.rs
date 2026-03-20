@@ -305,7 +305,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::Browser),
                 ..ContextMatcher::default()
             },
-            "Favor clean prose and natural punctuation for browser text fields, but stay grounded in the listed candidates, glossary evidence, and the utterance's technical topic when it clearly refers to software or documentation.",
+            "Favor clean prose and natural punctuation for browser text fields, except when the utterance is structured text such as a hostname, URL, email address, or similar punctuation-sensitive literal. In those cases preserve punctuation literally and do not rewrite it into prose. Stay grounded in the listed candidates, glossary evidence, and the utterance's technical topic when it clearly refers to software or documentation.",
             Some(RewriteCorrectionPolicy::Balanced),
         ),
         AppRule::built_in(
@@ -314,7 +314,7 @@ fn built_in_rules(default_policy: RewriteCorrectionPolicy) -> Vec<AppRule> {
                 surface_kind: Some(RewriteSurfaceKind::GenericText),
                 ..ContextMatcher::default()
             },
-            "Favor clean prose and natural punctuation for general text entry while staying grounded in the listed candidates and glossary evidence. If the utterance clearly discusses technical tools or software, prefer the most plausible technical term over a phonetically similar common word.",
+            "Favor clean prose and natural punctuation for general text entry, except when the utterance is structured text such as a hostname, URL, email address, or similar punctuation-sensitive literal. In those cases preserve punctuation literally and do not rewrite it into prose. Stay grounded in the listed candidates and glossary evidence. If the utterance clearly discusses technical tools or software, prefer the most plausible technical term over a phonetically similar common word.",
             Some(RewriteCorrectionPolicy::Balanced),
         ),
         AppRule::built_in(

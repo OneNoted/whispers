@@ -3,13 +3,14 @@ use std::time::Instant;
 use crate::config::Config;
 use crate::error::Result;
 use crate::postprocess::finalize;
+use crate::runtime_support::PidLock;
 
 mod osd;
 mod runtime;
 
 use runtime::DictationRuntime;
 
-pub async fn run(config: Config) -> Result<()> {
+pub async fn run(config: Config, _pid_lock: PidLock) -> Result<()> {
     let activation_started = Instant::now();
     // Register signals before startup work to minimize early-signal races.
     let mut sigusr1 =

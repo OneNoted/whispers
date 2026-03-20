@@ -5,9 +5,10 @@ use crate::agentic_rewrite;
 use crate::config::{Config, PostprocessMode, RewriteBackend, RewriteFallback};
 use crate::context::TypingContext;
 use crate::personalization::{self, PersonalizationRules};
-use crate::rewrite_protocol::{RewriteCorrectionPolicy, RewriteTranscript};
+use crate::rewrite_protocol::{RewriteCandidateKind, RewriteCorrectionPolicy, RewriteTranscript};
 use crate::rewrite_worker::RewriteService;
 use crate::session::{EligibleSessionEntry, SessionRewriteSummary};
+use crate::structured_text;
 use crate::transcribe::Transcript;
 
 use super::{execution, planning};
@@ -121,6 +122,8 @@ fn finalize_rewrite_attempt(
 ) -> FinalizedTranscript {
     let (base, rewrite_used) = match rewrite_result {
         Ok(text) if rewrite_output_accepted(config, &plan.rewrite_transcript, &text) => {
+            let text =
+                canonicalize_structured_output(&plan.rewrite_transcript, &text).unwrap_or(text);
             tracing::debug!(
                 output_len = text.len(),
                 mode = config.postprocess.mode.as_str(),
@@ -199,12 +202,56 @@ fn rewrite_output_accepted(
         return false;
     }
 
+    if let Some(candidate) = strict_structured_literal_candidate(rewrite_transcript) {
+        return structured_text::output_matches_candidate(text, candidate);
+    }
+    if structured_literal_candidate(rewrite_transcript)
+        .is_some_and(|candidate| structured_text::output_matches_candidate(text, candidate))
+    {
+        return false;
+    }
+
     match rewrite_transcript.policy_context.correction_policy {
         RewriteCorrectionPolicy::Conservative => {
             agentic_rewrite::conservative_output_allowed(rewrite_transcript, text)
         }
         RewriteCorrectionPolicy::Balanced | RewriteCorrectionPolicy::Aggressive => true,
     }
+}
+
+fn structured_literal_candidate(rewrite_transcript: &RewriteTranscript) -> Option<&str> {
+    rewrite_transcript
+        .rewrite_candidates
+        .iter()
+        .find(|candidate| candidate.kind == RewriteCandidateKind::StructuredLiteral)
+        .map(|candidate| candidate.text.as_str())
+}
+
+fn strict_structured_literal_candidate(rewrite_transcript: &RewriteTranscript) -> Option<&str> {
+    let candidate = structured_literal_candidate(rewrite_transcript)?;
+    structured_literal_source_matches_candidate(rewrite_transcript, candidate).then_some(candidate)
+}
+
+fn structured_literal_source_matches_candidate(
+    rewrite_transcript: &RewriteTranscript,
+    candidate: &str,
+) -> bool {
+    [
+        Some(rewrite_transcript.raw_text.as_str()),
+        Some(rewrite_transcript.correction_aware_text.as_str()),
+        rewrite_transcript.aggressive_correction_text.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|text| structured_text::output_matches_candidate(text, candidate))
+}
+
+fn canonicalize_structured_output(
+    rewrite_transcript: &RewriteTranscript,
+    text: &str,
+) -> Option<String> {
+    let candidate = strict_structured_literal_candidate(rewrite_transcript)?;
+    structured_text::output_matches_candidate(text, candidate).then(|| candidate.to_string())
 }
 
 #[cfg(test)]
@@ -304,5 +351,82 @@ mod tests {
 
         assert_eq!(finalized.text, "fallback text");
         assert!(!finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn structured_literal_meta_wrapper_is_canonicalized() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.rewrite_transcript.raw_text = "portfolio. Notes. Supply".into();
+        plan.rewrite_transcript.correction_aware_text = "portfolio. Notes. Supply".into();
+        plan.fallback_text = "portfolio.notes.supply".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        }];
+
+        let finalized = finalize_rewrite_attempt(
+            &config,
+            plan,
+            Ok("portfolio. Notes. Supply is the URL".into()),
+        );
+
+        assert_eq!(finalized.text, "portfolio.notes.supply");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn structured_literal_output_is_canonicalized_when_accepted() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.rewrite_transcript.raw_text = "portfolio. Notes. Supply".into();
+        plan.rewrite_transcript.correction_aware_text = "portfolio. Notes. Supply".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        }];
+
+        let finalized =
+            finalize_rewrite_attempt(&config, plan, Ok("portfolio . notes . supply".into()));
+
+        assert_eq!(finalized.text, "portfolio.notes.supply");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn structured_literal_embedded_sentence_rejects_lossy_candidate_only_output() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.fallback_text = "Check portfolio. Notes. Supply tomorrow".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        }];
+
+        let finalized =
+            finalize_rewrite_attempt(&config, plan, Ok("portfolio.notes.supply".into()));
+
+        assert_eq!(finalized.text, "Check portfolio. Notes. Supply tomorrow");
+        assert!(!finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn structured_literal_embedded_sentence_accepts_full_sentence_rewrite() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.fallback_text = "Check portfolio. Notes. Supply tomorrow".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        }];
+
+        let finalized = finalize_rewrite_attempt(
+            &config,
+            plan,
+            Ok("Check portfolio.notes.supply tomorrow.".into()),
+        );
+
+        assert_eq!(finalized.text, "Check portfolio.notes.supply tomorrow.");
+        assert!(finalized.rewrite_summary.rewrite_used);
     }
 }

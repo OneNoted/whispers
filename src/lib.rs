@@ -29,6 +29,7 @@ pub mod rewrite_worker;
 pub mod runtime_support;
 pub mod session;
 pub mod setup;
+pub(crate) mod structured_text;
 #[cfg(test)]
 pub mod test_support;
 pub mod transcribe;
