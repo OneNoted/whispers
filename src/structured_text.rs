@@ -141,7 +141,10 @@ fn raw_tokens(text: &str) -> Vec<Token> {
             continue;
         }
 
-        if matches!(ch, '.' | '/' | ':' | '_' | '-' | '@') {
+        if matches!(
+            ch,
+            '.' | '/' | ':' | '_' | '-' | '@' | '?' | '#' | '=' | '&'
+        ) {
             tokens.push(Token::Sep { ch, spoken: false });
         }
 
@@ -248,7 +251,16 @@ fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
         }
 
         let Some(Token::Word(word)) = tokens.get(index) else {
-            index = cluster_start;
+            if preserve_terminal_separator_cluster(&cluster) {
+                if cluster.contains('.') {
+                    dot_clusters += 1;
+                }
+                has_non_dot_cluster |= cluster.chars().any(|ch| ch != '.');
+                has_spoken_separator |= cluster_has_spoken;
+                normalized.push_str(&cluster);
+            } else {
+                index = cluster_start;
+            }
             break;
         };
 
@@ -276,8 +288,25 @@ fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
 fn allowed_separator_cluster(cluster: &str) -> bool {
     matches!(
         cluster,
-        "." | "-" | "_" | "@" | "/" | "//" | ":" | ":/" | "://"
+        "." | "-"
+            | "_"
+            | "@"
+            | "/"
+            | "//"
+            | ":"
+            | ":/"
+            | "://"
+            | "?"
+            | "#"
+            | "="
+            | "&"
+            | "/?"
+            | "/#"
     )
+}
+
+fn preserve_terminal_separator_cluster(cluster: &str) -> bool {
+    matches!(cluster, "/" | "?" | "#" | "=" | "&" | "/?" | "/#")
 }
 
 fn candidate_is_confident(candidate: &ParsedCandidate) -> bool {
@@ -383,6 +412,17 @@ mod tests {
     }
 
     #[test]
+    fn extracts_url_with_query_and_fragment_punctuation() {
+        let candidate =
+            extract_structured_candidate("Open https://example.com/?q=test&lang=en#frag now")
+                .expect("structured candidate");
+        assert_eq!(
+            candidate.normalized,
+            "https://example.com/?q=test&lang=en#frag"
+        );
+    }
+
+    #[test]
     fn strict_normalization_rejects_prose_suffixes() {
         assert_eq!(
             normalize_strict_structured_text("portfolio. Notes. Supply"),
@@ -391,6 +431,18 @@ mod tests {
         assert_eq!(
             normalize_strict_structured_text("portfolio. Notes. Supply is the URL"),
             None
+        );
+    }
+
+    #[test]
+    fn strict_normalization_preserves_trailing_separator() {
+        assert_eq!(
+            normalize_strict_structured_text("https://example.com/"),
+            Some("https://example.com/".into())
+        );
+        assert_eq!(
+            normalize_strict_structured_text("api/v1/"),
+            Some("api/v1/".into())
         );
     }
 
@@ -413,6 +465,14 @@ mod tests {
         assert!(output_matches_candidate(
             "portfolio. Notes. Supply is the URL",
             "portfolio.notes.supply"
+        ));
+        assert!(output_matches_candidate(
+            "https://example.com/",
+            "https://example.com/"
+        ));
+        assert!(!output_matches_candidate(
+            "https://example.com/",
+            "https://example.com"
         ));
         assert!(!output_matches_candidate(
             "check portfolio. Notes. Supply tomorrow",

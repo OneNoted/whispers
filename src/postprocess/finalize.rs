@@ -376,6 +376,29 @@ mod tests {
     }
 
     #[test]
+    fn structured_literal_url_with_query_and_fragment_meta_wrapper_is_canonicalized() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.rewrite_transcript.raw_text = "https://example.com/?q=test&lang=en#frag".into();
+        plan.rewrite_transcript.correction_aware_text =
+            "https://example.com/?q=test&lang=en#frag".into();
+        plan.fallback_text = "https://example.com/?q=test&lang=en#frag".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "https://example.com/?q=test&lang=en#frag".into(),
+        }];
+
+        let finalized = finalize_rewrite_attempt(
+            &config,
+            plan,
+            Ok("https://example.com/?q=test&lang=en#frag is the URL".into()),
+        );
+
+        assert_eq!(finalized.text, "https://example.com/?q=test&lang=en#frag");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
     fn structured_literal_output_is_canonicalized_when_accepted() {
         let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
         let mut plan = rewrite_plan();
