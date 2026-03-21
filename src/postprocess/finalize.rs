@@ -1,9 +1,11 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 use std::time::Instant;
 
 use crate::agentic_rewrite;
 use crate::config::{Config, PostprocessMode, RewriteBackend, RewriteFallback};
 use crate::context::TypingContext;
+use crate::error::WhsprError;
 use crate::personalization::{self, PersonalizationRules};
 use crate::rewrite_protocol::{RewriteCandidateKind, RewriteCorrectionPolicy, RewriteTranscript};
 use crate::rewrite_worker::RewriteService;
@@ -14,6 +16,7 @@ use crate::transcribe::Transcript;
 use super::{execution, planning};
 
 const FEEDBACK_DRAIN_DELAY: Duration = Duration::from_millis(150);
+const REWRITE_PLAN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalizedOperation {
@@ -65,12 +68,17 @@ pub async fn finalize_transcript(
             )
         }
         PostprocessMode::Rewrite => {
-            finalize_rewrite_plan_or_fallback(
+            match build_rewrite_plan_with_timeout(
                 config,
-                rewrite_service,
-                planning::build_rewrite_plan(config, &transcript, typing_context, recent_session),
+                &transcript,
+                typing_context,
+                recent_session,
             )
             .await
+            {
+                Ok(plan) => finalize_rewrite_plan_or_fallback(config, rewrite_service, plan).await,
+                Err(err) => finalize_rewrite_planning_failure(&transcript, &err),
+            }
         }
     };
     tracing::info!(
@@ -85,6 +93,73 @@ pub async fn finalize_transcript(
 
 pub async fn wait_for_feedback_drain() {
     tokio::time::sleep(FEEDBACK_DRAIN_DELAY).await;
+}
+
+async fn build_rewrite_plan_with_timeout(
+    config: &Config,
+    transcript: &Transcript,
+    typing_context: Option<&TypingContext>,
+    recent_session: Option<&EligibleSessionEntry>,
+) -> crate::error::Result<planning::RewritePlan> {
+    let config = config.clone();
+    let transcript = transcript.clone();
+    let typing_context = typing_context.cloned();
+    let recent_session = recent_session.cloned();
+
+    run_rewrite_thread_with_timeout(REWRITE_PLAN_TIMEOUT, "rewrite planning", move || {
+        planning::build_rewrite_plan(
+            &config,
+            &transcript,
+            typing_context.as_ref(),
+            recent_session.as_ref(),
+        )
+    })
+    .await
+}
+
+async fn run_rewrite_thread_with_timeout<T, F>(
+    timeout: Duration,
+    phase: &'static str,
+    task: F,
+) -> crate::error::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name(format!("whispers-{phase}"))
+        .spawn(move || {
+            let result = catch_unwind(AssertUnwindSafe(task))
+                .map_err(|_| format!("{phase} thread panicked"));
+            let _ = tx.send(result);
+        })
+        .map_err(|err| WhsprError::Rewrite(format!("failed to spawn {phase} thread: {err}")))?;
+
+    let result = tokio::time::timeout(timeout, rx)
+        .await
+        .map_err(|_| {
+            WhsprError::Rewrite(format!("{phase} timed out after {}ms", timeout.as_millis()))
+        })?
+        .map_err(|_| WhsprError::Rewrite(format!("{phase} thread exited without a result")))?;
+
+    result.map_err(WhsprError::Rewrite)
+}
+
+fn finalize_rewrite_planning_failure(
+    transcript: &Transcript,
+    err: &crate::error::WhsprError,
+) -> FinalizedTranscript {
+    tracing::warn!("rewrite planning failed: {err}; using raw transcript fallback");
+    FinalizedTranscript {
+        text: planning::raw_text(transcript),
+        operation: FinalizedOperation::Append,
+        rewrite_summary: SessionRewriteSummary {
+            had_edit_cues: false,
+            rewrite_used: false,
+            recommended_candidate: None,
+        },
+    }
 }
 
 async fn finalize_rewrite_plan_or_fallback(
@@ -257,6 +332,8 @@ fn canonicalize_structured_output(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
     use crate::rewrite_protocol::{
@@ -351,6 +428,56 @@ mod tests {
 
         assert_eq!(finalized.text, "fallback text");
         assert!(!finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[tokio::test]
+    async fn rewrite_thread_timeout_returns_value_when_task_finishes() {
+        let result = run_rewrite_thread_with_timeout(Duration::from_millis(50), "test task", || 7)
+            .await
+            .expect("task should finish");
+
+        assert_eq!(result, 7);
+    }
+
+    #[tokio::test]
+    async fn rewrite_thread_timeout_returns_error_when_task_hangs() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_thread = Arc::clone(&completed);
+
+        let err =
+            run_rewrite_thread_with_timeout(Duration::from_millis(10), "test task", move || {
+                std::thread::sleep(Duration::from_millis(50));
+                completed_in_thread.store(true, Ordering::Relaxed);
+            })
+            .await
+            .expect_err("task should time out");
+
+        match err {
+            WhsprError::Rewrite(message) => {
+                assert!(message.contains("test task timed out after 10ms"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        assert!(!completed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn rewrite_planning_failure_falls_back_to_trimmed_raw_text() {
+        let transcript = Transcript {
+            raw_text: "  raw transcript  ".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let finalized = finalize_rewrite_planning_failure(
+            &transcript,
+            &WhsprError::Rewrite("rewrite planning timed out after 5000ms".into()),
+        );
+
+        assert_eq!(finalized.text, "raw transcript");
+        assert!(!finalized.rewrite_summary.rewrite_used);
+        assert_eq!(finalized.operation, FinalizedOperation::Append);
     }
 
     #[test]
