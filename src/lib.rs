@@ -26,6 +26,7 @@ pub mod rewrite_model;
 pub mod rewrite_profile;
 pub mod rewrite_protocol;
 pub mod rewrite_worker;
+pub(crate) mod runtime_diagnostics;
 pub mod runtime_support;
 pub mod session;
 pub mod setup;

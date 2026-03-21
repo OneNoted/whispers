@@ -10,11 +10,15 @@ use crate::feedback::FeedbackPlayer;
 use crate::inject::TextInjector;
 use crate::postprocess::{execution, finalize};
 use crate::rewrite_worker::RewriteService;
+use crate::runtime_diagnostics::{
+    DictationRuntimeDiagnostics, DictationStage, DictationStageMetadata,
+};
 use crate::session::{self, EligibleSessionEntry};
 use crate::transcribe::Transcript;
 
 pub(super) struct DictationRuntime {
     config: Config,
+    diagnostics: DictationRuntimeDiagnostics,
     feedback: FeedbackPlayer,
     session_enabled: bool,
     transcriber: Option<asr::prepare::PreparedTranscriber>,
@@ -44,7 +48,7 @@ pub(super) struct ReadyInjection {
 }
 
 impl DictationRuntime {
-    pub(super) fn new(config: Config) -> Self {
+    pub(super) fn new(config: Config, diagnostics: DictationRuntimeDiagnostics) -> Self {
         let feedback = FeedbackPlayer::new(
             config.feedback.enabled,
             &config.feedback.start_sound,
@@ -54,6 +58,7 @@ impl DictationRuntime {
 
         Self {
             config,
+            diagnostics,
             feedback,
             session_enabled,
             transcriber: None,
@@ -75,6 +80,8 @@ impl DictationRuntime {
         let mut recorder = AudioRecorder::new(&self.config.audio);
         recorder.start()?;
         let osd = super::osd::spawn_osd();
+        self.diagnostics
+            .enter_stage(DictationStage::Recording, DictationStageMetadata::default());
         tracing::info!("recording... (run whispers again to stop)");
 
         Ok(ActiveRecording {
@@ -85,6 +92,10 @@ impl DictationRuntime {
     }
 
     pub(super) fn prepare_services(&mut self) -> Result<()> {
+        self.diagnostics.enter_stage(
+            DictationStage::AsrPrepare,
+            DictationStageMetadata::default(),
+        );
         let transcriber = asr::prepare::prepare_transcriber(&self.config)?;
         let rewrite_service = execution::prepare_rewrite_service(&self.config);
         asr::prepare::prewarm_transcriber(&transcriber, "recording");
@@ -100,6 +111,7 @@ impl DictationRuntime {
     pub(super) fn cancel_recording(&self, mut recording: ActiveRecording) -> Result<()> {
         super::osd::kill_osd(&mut recording.osd);
         recording.recorder.stop()?;
+        self.diagnostics.clear_with_stage(DictationStage::Cancelled);
         Ok(())
     }
 
@@ -121,6 +133,15 @@ impl DictationRuntime {
             audio_duration_ms,
             "transcribing captured audio"
         );
+        self.diagnostics.enter_stage(
+            DictationStage::RecordingStopped,
+            DictationStageMetadata {
+                audio_samples: Some(audio.len()),
+                sample_rate: Some(sample_rate),
+                audio_duration_ms: Some(audio_duration_ms),
+                ..DictationStageMetadata::default()
+            },
+        );
 
         Ok(CapturedRecording {
             audio,
@@ -133,6 +154,19 @@ impl DictationRuntime {
         &mut self,
         recording: CapturedRecording,
     ) -> Result<TranscribedRecording> {
+        let audio_samples = recording.audio.len();
+        let sample_rate = recording.sample_rate;
+        let audio_duration_ms =
+            ((audio_samples as f64 / sample_rate as f64) * 1000.0).round() as u64;
+        self.diagnostics.enter_stage(
+            DictationStage::AsrTranscribe,
+            DictationStageMetadata {
+                audio_samples: Some(audio_samples),
+                sample_rate: Some(sample_rate),
+                audio_duration_ms: Some(audio_duration_ms),
+                ..DictationStageMetadata::default()
+            },
+        );
         let transcriber = self
             .transcriber
             .take()
@@ -176,6 +210,13 @@ impl DictationRuntime {
         });
 
         let finalize_started = Instant::now();
+        self.diagnostics.enter_stage(
+            DictationStage::Postprocess,
+            DictationStageMetadata {
+                transcript_chars: Some(recording.transcript.raw_text.len()),
+                ..DictationStageMetadata::default()
+            },
+        );
         let finalized = finalize::finalize_transcript(
             &self.config,
             recording.transcript,
@@ -214,11 +255,26 @@ impl DictationRuntime {
         } = finalized;
 
         tracing::info!("injecting text: {:?}", text);
+        let stage_metadata = DictationStageMetadata {
+            output_chars: Some(text.len()),
+            operation: Some(match operation {
+                finalize::FinalizedOperation::Append => "append".to_string(),
+                finalize::FinalizedOperation::ReplaceLastEntry { .. } => {
+                    "replace_last_entry".to_string()
+                }
+            }),
+            rewrite_used: Some(rewrite_summary.rewrite_used),
+            ..DictationStageMetadata::default()
+        };
+        self.diagnostics
+            .enter_stage(DictationStage::Inject, stage_metadata.clone());
         let injector = TextInjector::new();
         match operation {
             finalize::FinalizedOperation::Append => {
                 injector.inject(&text).await?;
                 if self.session_enabled {
+                    self.diagnostics
+                        .enter_stage(DictationStage::SessionWrite, stage_metadata.clone());
                     session::record_append(
                         &self.config.session,
                         &injection_context,
@@ -235,6 +291,8 @@ impl DictationRuntime {
                     .replace_recent_text(delete_graphemes, &text)
                     .await?;
                 if self.session_enabled {
+                    self.diagnostics
+                        .enter_stage(DictationStage::SessionWrite, stage_metadata);
                     session::record_replace(
                         &self.config.session,
                         &injection_context,
