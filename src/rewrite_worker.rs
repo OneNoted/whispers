@@ -80,31 +80,36 @@ impl RewriteService {
         self.spawn_worker()
     }
 
-    async fn ensure_running(&self, timeout: Duration) -> Result<()> {
+    async fn ensure_running(
+        &self,
+        deadline: tokio::time::Instant,
+        timeout: Duration,
+    ) -> Result<()> {
         if self.is_running() {
             return Ok(());
         }
 
         self.prewarm()?;
 
-        let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            match UnixStream::connect(&self.socket_path).await {
-                Ok(stream) => {
+            let remaining = remaining_rewrite_budget(deadline, timeout)?;
+            match tokio::time::timeout(remaining, UnixStream::connect(&self.socket_path)).await {
+                Ok(Ok(stream)) => {
                     drop(stream);
                     return Ok(());
                 }
-                Err(err) if tokio::time::Instant::now() < deadline => {
+                Ok(Err(err)) if tokio::time::Instant::now() < deadline => {
                     let _ = err;
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    tokio::time::sleep(Duration::from_millis(50).min(remaining)).await;
                 }
-                Err(err) => {
+                Ok(Err(err)) => {
                     return Err(WhsprError::Rewrite(format!(
                         "rewrite worker at {} did not become ready: {err}",
                         self.socket_path.display()
                     )));
                 }
-            }
+                Err(_) => return Err(rewrite_timeout_error(timeout)),
+            };
         }
     }
 
@@ -143,62 +148,60 @@ impl RewriteService {
     }
 }
 
-pub async fn rewrite_with_service(
+fn remaining_rewrite_budget(deadline: tokio::time::Instant, timeout: Duration) -> Result<Duration> {
+    deadline
+        .checked_duration_since(tokio::time::Instant::now())
+        .ok_or_else(|| rewrite_timeout_error(timeout))
+}
+
+fn rewrite_timeout_error(timeout: Duration) -> WhsprError {
+    WhsprError::Rewrite(format!(
+        "rewrite worker timed out after {}ms",
+        timeout.as_millis()
+    ))
+}
+
+async fn rewrite_request(
     service: &RewriteService,
-    config: &RewriteConfig,
-    transcript: &RewriteTranscript,
-    custom_instructions: Option<&str>,
+    payload: &[u8],
+    deadline: tokio::time::Instant,
+    timeout: Duration,
 ) -> Result<String> {
-    let timeout = Duration::from_millis(config.timeout_ms);
-    tracing::trace!(
-        candidates = transcript.rewrite_candidates.len(),
-        hypotheses = transcript.edit_hypotheses.len(),
-        has_recommended = transcript.recommended_candidate.is_some(),
-        "sending rewrite request to worker"
-    );
-    service.ensure_running(timeout).await?;
+    let mut stream = tokio::time::timeout(
+        remaining_rewrite_budget(deadline, timeout)?,
+        UnixStream::connect(&service.socket_path),
+    )
+    .await
+    .map_err(|_| rewrite_timeout_error(timeout))?
+    .map_err(|e| {
+        WhsprError::Rewrite(format!(
+            "failed to connect to rewrite worker at {}: {e}",
+            service.socket_path.display()
+        ))
+    })?;
 
-    let mut stream = tokio::time::timeout(timeout, UnixStream::connect(&service.socket_path))
-        .await
-        .map_err(|_| {
-            WhsprError::Rewrite(format!(
-                "rewrite worker timed out after {}ms",
-                timeout.as_millis()
-            ))
-        })?
-        .map_err(|e| {
-            WhsprError::Rewrite(format!(
-                "failed to connect to rewrite worker at {}: {e}",
-                service.socket_path.display()
-            ))
-        })?;
+    tokio::time::timeout(
+        remaining_rewrite_budget(deadline, timeout)?,
+        stream.write_all(payload),
+    )
+    .await
+    .map_err(|_| rewrite_timeout_error(timeout))?
+    .map_err(|e| WhsprError::Rewrite(format!("failed to send rewrite request: {e}")))?;
 
-    let mut payload = serde_json::to_vec(&WorkerRequest::Rewrite {
-        transcript: transcript.clone(),
-        custom_instructions: custom_instructions.map(str::to_owned),
-    })
-    .map_err(|e| WhsprError::Rewrite(format!("failed to encode rewrite request: {e}")))?;
-    payload.push(b'\n');
-    stream
-        .write_all(&payload)
+    tokio::time::timeout(remaining_rewrite_budget(deadline, timeout)?, stream.flush())
         .await
-        .map_err(|e| WhsprError::Rewrite(format!("failed to send rewrite request: {e}")))?;
-    stream
-        .flush()
-        .await
+        .map_err(|_| rewrite_timeout_error(timeout))?
         .map_err(|e| WhsprError::Rewrite(format!("failed to flush rewrite request: {e}")))?;
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    tokio::time::timeout(timeout, reader.read_line(&mut line))
-        .await
-        .map_err(|_| {
-            WhsprError::Rewrite(format!(
-                "rewrite worker timed out after {}ms",
-                timeout.as_millis()
-            ))
-        })?
-        .map_err(|e| WhsprError::Rewrite(format!("failed to read rewrite response: {e}")))?;
+    tokio::time::timeout(
+        remaining_rewrite_budget(deadline, timeout)?,
+        reader.read_line(&mut line),
+    )
+    .await
+    .map_err(|_| rewrite_timeout_error(timeout))?
+    .map_err(|e| WhsprError::Rewrite(format!("failed to read rewrite response: {e}")))?;
 
     if line.trim().is_empty() {
         return Err(WhsprError::Rewrite(
@@ -218,6 +221,31 @@ pub async fn rewrite_with_service(
         }
         WorkerResponse::Error { message } => Err(WhsprError::Rewrite(message)),
     }
+}
+
+pub async fn rewrite_with_service(
+    service: &RewriteService,
+    config: &RewriteConfig,
+    transcript: &RewriteTranscript,
+    custom_instructions: Option<&str>,
+) -> Result<String> {
+    let timeout = Duration::from_millis(config.timeout_ms);
+    let deadline = tokio::time::Instant::now() + timeout;
+    tracing::trace!(
+        candidates = transcript.rewrite_candidates.len(),
+        hypotheses = transcript.edit_hypotheses.len(),
+        has_recommended = transcript.recommended_candidate.is_some(),
+        "sending rewrite request to worker"
+    );
+    service.ensure_running(deadline, timeout).await?;
+
+    let mut payload = serde_json::to_vec(&WorkerRequest::Rewrite {
+        transcript: transcript.clone(),
+        custom_instructions: custom_instructions.map(str::to_owned),
+    })
+    .map_err(|e| WhsprError::Rewrite(format!("failed to encode rewrite request: {e}")))?;
+    payload.push(b'\n');
+    rewrite_request(service, &payload, deadline, timeout).await
 }
 
 fn runtime_dir() -> PathBuf {
@@ -300,7 +328,13 @@ impl Drop for StartupLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::WhsprError;
     use crate::rewrite_profile::RewriteProfile;
+    use crate::rewrite_protocol::{
+        RewriteCorrectionPolicy, RewritePolicyContext, RewriteTranscript,
+    };
+    use crate::test_support::unique_temp_dir;
+    use std::path::PathBuf;
 
     #[test]
     fn service_paths_change_when_profile_changes() {
@@ -338,5 +372,78 @@ mod tests {
         };
         let service = RewriteService::new(&config, Path::new("/models/custom.gguf"));
         assert_eq!(service.profile, ResolvedRewriteProfile::Qwen);
+    }
+
+    #[tokio::test]
+    async fn rewrite_with_service_times_out_when_request_write_stalls() {
+        let runtime_dir = unique_temp_dir("rewrite-request-timeout");
+        let socket_path = runtime_dir.join("rewrite.sock");
+        let listener =
+            tokio::net::UnixListener::bind(&socket_path).expect("bind stalled rewrite socket");
+
+        let server = tokio::spawn(async move {
+            let (probe, _) = listener.accept().await.expect("accept readiness probe");
+            drop(probe);
+            let (_stalled_request, _) = listener.accept().await.expect("accept rewrite request");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+
+        let service = RewriteService {
+            socket_path: socket_path.clone(),
+            lock_path: runtime_dir.join("rewrite.lock"),
+            model_path: PathBuf::from("/tmp/test.gguf"),
+            profile: ResolvedRewriteProfile::Generic,
+            max_tokens: 256,
+            max_output_chars: 1200,
+            idle_timeout_ms: 0,
+        };
+        let config = RewriteConfig {
+            timeout_ms: 50,
+            ..RewriteConfig::default()
+        };
+
+        let err = rewrite_with_service(
+            &service,
+            &config,
+            &oversized_transcript(2 * 1024 * 1024),
+            None,
+        )
+        .await
+        .expect_err("stalled rewrite request should time out");
+        let message = match err {
+            WhsprError::Rewrite(message) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(message.contains("rewrite worker timed out"));
+
+        server.abort();
+    }
+
+    fn oversized_transcript(size: usize) -> RewriteTranscript {
+        let text = "word ".repeat(size / 5);
+        RewriteTranscript {
+            raw_text: text.clone(),
+            correction_aware_text: text,
+            aggressive_correction_text: None,
+            detected_language: Some("en".into()),
+            typing_context: None,
+            recent_session_entries: Vec::new(),
+            session_backtrack_candidates: Vec::new(),
+            recommended_session_candidate: None,
+            segments: Vec::new(),
+            edit_intents: Vec::new(),
+            edit_signals: Vec::new(),
+            edit_hypotheses: Vec::new(),
+            rewrite_candidates: Vec::new(),
+            recommended_candidate: None,
+            edit_context: Default::default(),
+            policy_context: RewritePolicyContext {
+                correction_policy: RewriteCorrectionPolicy::Balanced,
+                matched_rule_names: Vec::new(),
+                effective_rule_instructions: Vec::new(),
+                active_glossary_terms: Vec::new(),
+                glossary_candidates: Vec::new(),
+            },
+        }
     }
 }
