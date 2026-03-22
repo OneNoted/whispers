@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -8,12 +8,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, RewriteBackend, TranscriptionBackend};
+use crate::runtime_guards::run_command_output_with_timeout;
 
 const STATUS_FILE_NAME: &str = "main-status.json";
 const HANG_DEBUG_ENV: &str = "WHISPERS_HANG_DEBUG";
 const DEFAULT_PREPARE_HANG_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_TRANSCRIBE_HANG_TIMEOUT: Duration = Duration::from_secs(90);
+const DEFAULT_POSTPROCESS_HANG_TIMEOUT: Duration = Duration::from_secs(15);
+const DEFAULT_INJECT_HANG_TIMEOUT: Duration = Duration::from_secs(8);
+const DEFAULT_SESSION_WRITE_HANG_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_WATCHDOG_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DEFAULT_COMMAND_CAPTURE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DictationStage {
@@ -48,6 +53,8 @@ impl DictationStage {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct DictationStageMetadata {
+    pub substage: Option<String>,
+    pub detail: Option<String>,
     pub audio_samples: Option<usize>,
     pub sample_rate: Option<u32>,
     pub audio_duration_ms: Option<u64>,
@@ -55,6 +62,7 @@ pub(crate) struct DictationStageMetadata {
     pub output_chars: Option<usize>,
     pub operation: Option<String>,
     pub rewrite_used: Option<bool>,
+    pub degraded_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,7 +96,11 @@ struct HangWatchdogConfig {
     enabled: bool,
     prepare_timeout: Duration,
     transcribe_timeout: Duration,
+    postprocess_timeout: Duration,
+    inject_timeout: Duration,
+    session_write_timeout: Duration,
     poll_interval: Duration,
+    command_timeout: Duration,
 }
 
 #[derive(Debug)]
@@ -114,8 +126,7 @@ impl DictationRuntimeDiagnostics {
 
     fn build(config: &Config, hang_watchdog: HangWatchdogConfig) -> Self {
         let now = now_ms();
-        let watchdog_enabled = hang_watchdog.enabled
-            && config.transcription.backend == TranscriptionBackend::WhisperCpp;
+        let watchdog_enabled = hang_watchdog.enabled;
         let diagnostics = Self {
             status_path: status_file_path(),
             state: Arc::new(Mutex::new(State {
@@ -285,7 +296,9 @@ impl DictationRuntimeDiagnostics {
                 }
 
                 dumped_stage_started_at_ms = Some(snapshot.stage_started_at_ms);
-                if let Err(err) = write_hang_bundle(&status_path, stage, &snapshot) {
+                if let Err(err) =
+                    write_hang_bundle(&status_path, stage, &snapshot, config.command_timeout)
+                {
                     tracing::warn!("failed to write hang diagnostics bundle: {err}");
                 }
             }
@@ -354,15 +367,18 @@ fn transcription_model_label(config: &Config) -> String {
     }
 }
 
-fn hang_watchdog_config(config: &Config) -> HangWatchdogConfig {
+fn hang_watchdog_config(_config: &Config) -> HangWatchdogConfig {
     HangWatchdogConfig {
         enabled: std::env::var(HANG_DEBUG_ENV)
             .map(|value| value == "1")
-            .unwrap_or(false)
-            && config.transcription.backend == TranscriptionBackend::WhisperCpp,
+            .unwrap_or(false),
         prepare_timeout: DEFAULT_PREPARE_HANG_TIMEOUT,
         transcribe_timeout: DEFAULT_TRANSCRIBE_HANG_TIMEOUT,
+        postprocess_timeout: DEFAULT_POSTPROCESS_HANG_TIMEOUT,
+        inject_timeout: DEFAULT_INJECT_HANG_TIMEOUT,
+        session_write_timeout: DEFAULT_SESSION_WRITE_HANG_TIMEOUT,
         poll_interval: DEFAULT_WATCHDOG_POLL_INTERVAL,
+        command_timeout: DEFAULT_COMMAND_CAPTURE_TIMEOUT,
     }
 }
 
@@ -370,6 +386,9 @@ fn stage_timeout(stage: DictationStage, config: HangWatchdogConfig) -> Option<Du
     match stage {
         DictationStage::AsrPrepare => Some(config.prepare_timeout),
         DictationStage::AsrTranscribe => Some(config.transcribe_timeout),
+        DictationStage::Postprocess => Some(config.postprocess_timeout),
+        DictationStage::Inject => Some(config.inject_timeout),
+        DictationStage::SessionWrite => Some(config.session_write_timeout),
         _ => None,
     }
 }
@@ -385,6 +404,7 @@ fn write_hang_bundle(
     status_path: &Path,
     stage: DictationStage,
     snapshot: &MainStatusSnapshot,
+    command_timeout: Duration,
 ) -> std::io::Result<PathBuf> {
     let bundle_path = hang_bundle_path(status_path, snapshot.pid, stage);
     let mut body = String::new();
@@ -403,9 +423,9 @@ fn write_hang_bundle(
         }
     }
     let _ = writeln!(body);
-    body.push_str(&capture_stack_trace(snapshot.pid));
+    body.push_str(&capture_stack_trace(snapshot.pid, command_timeout));
     body.push('\n');
-    body.push_str(&capture_lsof(snapshot.pid));
+    body.push_str(&capture_lsof(snapshot.pid, command_timeout));
 
     std::fs::write(&bundle_path, body)?;
     tracing::warn!(
@@ -416,10 +436,10 @@ fn write_hang_bundle(
     Ok(bundle_path)
 }
 
-fn capture_stack_trace(pid: u32) -> String {
+fn capture_stack_trace(pid: u32, timeout: Duration) -> String {
     let pid = pid.to_string();
     if command_available("gstack") {
-        let output = run_command("gstack", &[pid.as_str()]);
+        let output = run_command("gstack", &[pid.as_str()], timeout);
         if output.success {
             return format_command_output("gstack", &output);
         }
@@ -429,7 +449,11 @@ fn capture_stack_trace(pid: u32) -> String {
             body.push('\n');
             body.push_str(&format_command_output(
                 "gdb",
-                &run_command("gdb", &["-batch", "-ex", "thread apply all bt", "-p", &pid]),
+                &run_command(
+                    "gdb",
+                    &["-batch", "-ex", "thread apply all bt", "-p", &pid],
+                    timeout,
+                ),
             ));
         }
         return body;
@@ -438,19 +462,26 @@ fn capture_stack_trace(pid: u32) -> String {
     if command_available("gdb") {
         return format_command_output(
             "gdb",
-            &run_command("gdb", &["-batch", "-ex", "thread apply all bt", "-p", &pid]),
+            &run_command(
+                "gdb",
+                &["-batch", "-ex", "thread apply all bt", "-p", &pid],
+                timeout,
+            ),
         );
     }
 
     "== stack trace ==\nno stack capture tool available; checked gstack and gdb\n".to_string()
 }
 
-fn capture_lsof(pid: u32) -> String {
+fn capture_lsof(pid: u32, timeout: Duration) -> String {
     if !command_available("lsof") {
         return "== lsof ==\nlsof not available\n".to_string();
     }
 
-    format_command_output("lsof", &run_command("lsof", &["-p", &pid.to_string()]))
+    format_command_output(
+        "lsof",
+        &run_command("lsof", &["-p", &pid.to_string()], timeout),
+    )
 }
 
 #[derive(Debug)]
@@ -461,12 +492,10 @@ struct CommandCapture {
     error: Option<String>,
 }
 
-fn run_command(program: &str, args: &[&str]) -> CommandCapture {
-    match Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-    {
+fn run_command(program: &str, args: &[&str], timeout: Duration) -> CommandCapture {
+    let mut command = Command::new(program);
+    command.args(args);
+    match run_command_output_with_timeout(&mut command, timeout) {
         Ok(output) => CommandCapture {
             success: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -612,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn watchdog_only_arms_for_local_whisper_cpp() {
+    fn watchdog_arms_for_any_backend_when_enabled() {
         with_runtime_dir(|| {
             let mut cloud = Config::default();
             cloud.transcription.backend = TranscriptionBackend::Cloud;
@@ -622,10 +651,14 @@ mod tests {
                     enabled: true,
                     prepare_timeout: Duration::from_millis(20),
                     transcribe_timeout: Duration::from_millis(20),
+                    postprocess_timeout: Duration::from_millis(20),
+                    inject_timeout: Duration::from_millis(20),
+                    session_write_timeout: Duration::from_millis(20),
                     poll_interval: Duration::from_millis(5),
+                    command_timeout: Duration::from_millis(20),
                 },
             );
-            assert!(!diagnostics.watchdog_enabled());
+            assert!(diagnostics.watchdog_enabled());
 
             let diagnostics = DictationRuntimeDiagnostics::new_with_watchdog_config(
                 &Config::default(),
@@ -633,7 +666,11 @@ mod tests {
                     enabled: true,
                     prepare_timeout: Duration::from_millis(20),
                     transcribe_timeout: Duration::from_millis(20),
+                    postprocess_timeout: Duration::from_millis(20),
+                    inject_timeout: Duration::from_millis(20),
+                    session_write_timeout: Duration::from_millis(20),
                     poll_interval: Duration::from_millis(5),
+                    command_timeout: Duration::from_millis(20),
                 },
             );
             assert!(diagnostics.watchdog_enabled());
@@ -649,7 +686,11 @@ mod tests {
                     enabled: true,
                     prepare_timeout: Duration::from_millis(40),
                     transcribe_timeout: Duration::from_millis(40),
+                    postprocess_timeout: Duration::from_millis(40),
+                    inject_timeout: Duration::from_millis(40),
+                    session_write_timeout: Duration::from_millis(40),
                     poll_interval: Duration::from_millis(5),
+                    command_timeout: Duration::from_millis(40),
                 },
             );
             diagnostics.enter_stage(
@@ -706,7 +747,11 @@ mod tests {
                     enabled: true,
                     prepare_timeout: Duration::from_millis(30),
                     transcribe_timeout: Duration::from_millis(30),
+                    postprocess_timeout: Duration::from_millis(30),
+                    inject_timeout: Duration::from_millis(30),
+                    session_write_timeout: Duration::from_millis(30),
                     poll_interval: Duration::from_millis(5),
+                    command_timeout: Duration::from_secs(1),
                 },
             );
             diagnostics.enter_stage(
@@ -748,6 +793,58 @@ mod tests {
             assert!(dump.contains("\"audio_samples\": 4096"));
             assert!(dump.contains("fake gstack"));
             assert!(dump.contains("fake lsof"));
+        });
+    }
+
+    #[test]
+    fn watchdog_covers_postprocess_stage() {
+        with_runtime_dir(|| {
+            let diagnostics = DictationRuntimeDiagnostics::new_with_watchdog_config(
+                &Config::default(),
+                HangWatchdogConfig {
+                    enabled: true,
+                    prepare_timeout: Duration::from_secs(1),
+                    transcribe_timeout: Duration::from_secs(1),
+                    postprocess_timeout: Duration::from_millis(30),
+                    inject_timeout: Duration::from_secs(1),
+                    session_write_timeout: Duration::from_secs(1),
+                    poll_interval: Duration::from_millis(5),
+                    command_timeout: Duration::from_millis(20),
+                },
+            );
+            diagnostics.enter_stage(
+                DictationStage::Postprocess,
+                DictationStageMetadata {
+                    substage: Some("planning".into()),
+                    transcript_chars: Some(12),
+                    ..DictationStageMetadata::default()
+                },
+            );
+
+            let runtime_dir = status_file_path()
+                .parent()
+                .expect("runtime dir")
+                .to_path_buf();
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let found = std::fs::read_dir(&runtime_dir)
+                    .expect("read runtime dir")
+                    .flatten()
+                    .any(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .contains(&format!("{}-", DictationStage::Postprocess.as_str()))
+                    });
+                if found {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "watchdog did not emit dump"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
         });
     }
 }

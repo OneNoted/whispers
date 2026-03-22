@@ -1,4 +1,7 @@
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use clap::Parser;
 use whispers::cli::{
@@ -12,6 +15,8 @@ use whispers::{
     agentic_rewrite, app, asr, asr_model, audio, cloud, completions, file_audio, model,
     personalization, postprocess, rewrite_model, runtime_support, setup,
 };
+
+const RUNTIME_TEXT_RESOURCES_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn build_context_matcher(
     surface_kind: Option<RewriteSurfaceKind>,
@@ -46,6 +51,14 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
     let transcript =
         asr::execute::transcribe_audio(&config, prepared, samples, file_audio::TARGET_SAMPLE_RATE)
             .await?;
+    let runtime_text_resources = if raw {
+        None
+    } else {
+        Some(load_runtime_text_resources_or_default(
+            &config,
+            "file transcription",
+        ))
+    };
 
     let text = if raw {
         postprocess::planning::raw_text(&transcript)
@@ -54,6 +67,7 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
             &config,
             transcript,
             rewrite_service.as_ref(),
+            runtime_text_resources.as_ref(),
             None,
             None,
         )
@@ -69,6 +83,38 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
     }
 
     Ok(())
+}
+
+fn load_runtime_text_resources_or_default(
+    config: &Config,
+    phase: &'static str,
+) -> postprocess::planning::RuntimeTextResources {
+    let config = config.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    let spawn_result = thread::Builder::new()
+        .name(format!("whispers-{}", phase.replace(' ', "-")))
+        .spawn(move || {
+            let _ = tx.send(postprocess::planning::load_runtime_text_resources(&config));
+        });
+
+    match spawn_result {
+        Ok(_) => match rx.recv_timeout(RUNTIME_TEXT_RESOURCES_TIMEOUT) {
+            Ok(resources) => resources,
+            Err(_) => {
+                tracing::warn!(
+                    "failed to load runtime text resources for {phase}: timed out after {}ms; using defaults",
+                    RUNTIME_TEXT_RESOURCES_TIMEOUT.as_millis()
+                );
+                postprocess::planning::RuntimeTextResources::default()
+            }
+        },
+        Err(err) => {
+            tracing::warn!(
+                "failed to load runtime text resources for {phase}: {err}; using defaults"
+            );
+            postprocess::planning::RuntimeTextResources::default()
+        }
+    }
 }
 
 async fn run_default(cli: &Cli) -> Result<()> {

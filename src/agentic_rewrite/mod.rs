@@ -46,6 +46,12 @@ struct PreparedGlossaryEntry {
     normalized_aliases: Vec<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RuntimePolicyResources {
+    policy_rules: Vec<AppRule>,
+    glossary_entries: Vec<GlossaryEntry>,
+}
+
 pub use runtime::conservative_output_allowed;
 
 pub fn default_policy_path() -> &'static str {
@@ -56,17 +62,31 @@ pub fn default_glossary_path() -> &'static str {
     store::default_glossary_path()
 }
 
-pub fn apply_runtime_policy(config: &Config, transcript: &mut RewriteTranscript) {
-    let policy_rules = store::load_policy_file_for_runtime(&config.resolved_rewrite_policy_path());
-    let glossary_entries =
-        store::load_glossary_file_for_runtime(&config.resolved_rewrite_glossary_path());
+pub(crate) fn load_runtime_resources(config: &Config) -> RuntimePolicyResources {
+    RuntimePolicyResources {
+        policy_rules: store::load_policy_file_for_runtime(&config.resolved_rewrite_policy_path()),
+        glossary_entries: store::load_glossary_file_for_runtime(
+            &config.resolved_rewrite_glossary_path(),
+        ),
+    }
+}
 
+pub fn apply_runtime_policy(config: &Config, transcript: &mut RewriteTranscript) {
+    let resources = load_runtime_resources(config);
+    apply_runtime_policy_with_resources(config, transcript, &resources);
+}
+
+pub(crate) fn apply_runtime_policy_with_resources(
+    config: &Config,
+    transcript: &mut RewriteTranscript,
+    resources: &RuntimePolicyResources,
+) {
     let policy_context = runtime::resolve_policy_context(
         config.rewrite.default_correction_policy,
         transcript.typing_context.as_ref(),
         &transcript.rewrite_candidates,
-        &policy_rules,
-        &glossary_entries,
+        &resources.policy_rules,
+        &resources.glossary_entries,
     );
 
     for candidate in &policy_context.glossary_candidates {

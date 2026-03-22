@@ -1,4 +1,3 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -9,6 +8,7 @@ use crate::error::WhsprError;
 use crate::personalization::{self, PersonalizationRules};
 use crate::rewrite_protocol::{RewriteCandidateKind, RewriteCorrectionPolicy, RewriteTranscript};
 use crate::rewrite_worker::RewriteService;
+use crate::runtime_guards::run_detached_with_timeout_async;
 use crate::session::{EligibleSessionEntry, SessionRewriteSummary};
 use crate::structured_text;
 use crate::transcribe::Transcript;
@@ -16,6 +16,7 @@ use crate::transcribe::Transcript;
 use super::{execution, planning};
 
 const FEEDBACK_DRAIN_DELAY: Duration = Duration::from_millis(150);
+const RUNTIME_TEXT_RESOURCES_TIMEOUT: Duration = Duration::from_secs(1);
 const REWRITE_PLAN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,19 +33,21 @@ pub struct FinalizedTranscript {
     pub text: String,
     pub operation: FinalizedOperation,
     pub rewrite_summary: SessionRewriteSummary,
+    pub degraded_reason: Option<String>,
 }
 
 pub async fn finalize_transcript(
     config: &Config,
     transcript: Transcript,
     rewrite_service: Option<&RewriteService>,
+    runtime_resources: Option<&planning::RuntimeTextResources>,
     typing_context: Option<&TypingContext>,
     recent_session: Option<&EligibleSessionEntry>,
 ) -> FinalizedTranscript {
     let started = Instant::now();
     let finalized = match config.postprocess.mode {
         PostprocessMode::Raw => {
-            let rules = planning::load_runtime_rules(config);
+            let resources = load_runtime_text_resources_or_default(config, runtime_resources).await;
             finalize_plain_text(
                 planning::raw_text(&transcript),
                 SessionRewriteSummary {
@@ -52,11 +55,11 @@ pub async fn finalize_transcript(
                     rewrite_used: false,
                     recommended_candidate: None,
                 },
-                &rules,
+                &resources.rules,
             )
         }
         PostprocessMode::LegacyBasic => {
-            let rules = planning::load_runtime_rules(config);
+            let resources = load_runtime_text_resources_or_default(config, runtime_resources).await;
             finalize_plain_text(
                 crate::cleanup::clean_transcript(&transcript, &config.cleanup),
                 SessionRewriteSummary {
@@ -64,12 +67,13 @@ pub async fn finalize_transcript(
                     rewrite_used: false,
                     recommended_candidate: None,
                 },
-                &rules,
+                &resources.rules,
             )
         }
         PostprocessMode::Rewrite => {
             match build_rewrite_plan_with_timeout(
                 config,
+                runtime_resources,
                 &transcript,
                 typing_context,
                 recent_session,
@@ -95,55 +99,59 @@ pub async fn wait_for_feedback_drain() {
     tokio::time::sleep(FEEDBACK_DRAIN_DELAY).await;
 }
 
+async fn load_runtime_text_resources_or_default(
+    config: &Config,
+    runtime_resources: Option<&planning::RuntimeTextResources>,
+) -> planning::RuntimeTextResources {
+    if let Some(resources) = runtime_resources {
+        return resources.clone();
+    }
+
+    let config = config.clone();
+    match run_detached_with_timeout_async(
+        RUNTIME_TEXT_RESOURCES_TIMEOUT,
+        "runtime text resources",
+        move || planning::load_runtime_text_resources(&config),
+    )
+    .await
+    {
+        Ok(resources) => resources,
+        Err(err) => {
+            tracing::warn!(
+                "failed to load runtime text resources: {}; using defaults",
+                err.describe("runtime text resources")
+            );
+            planning::RuntimeTextResources::default()
+        }
+    }
+}
+
 async fn build_rewrite_plan_with_timeout(
     config: &Config,
+    runtime_resources: Option<&planning::RuntimeTextResources>,
     transcript: &Transcript,
     typing_context: Option<&TypingContext>,
     recent_session: Option<&EligibleSessionEntry>,
 ) -> crate::error::Result<planning::RewritePlan> {
     let config = config.clone();
+    let runtime_resources = runtime_resources.cloned();
     let transcript = transcript.clone();
     let typing_context = typing_context.cloned();
     let recent_session = recent_session.cloned();
 
-    run_rewrite_thread_with_timeout(REWRITE_PLAN_TIMEOUT, "rewrite planning", move || {
+    run_detached_with_timeout_async(REWRITE_PLAN_TIMEOUT, "rewrite planning", move || {
+        let runtime_resources =
+            runtime_resources.unwrap_or_else(|| planning::load_runtime_text_resources(&config));
         planning::build_rewrite_plan(
             &config,
+            &runtime_resources,
             &transcript,
             typing_context.as_ref(),
             recent_session.as_ref(),
         )
     })
     .await
-}
-
-async fn run_rewrite_thread_with_timeout<T, F>(
-    timeout: Duration,
-    phase: &'static str,
-    task: F,
-) -> crate::error::Result<T>
-where
-    T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-{
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::Builder::new()
-        .name(format!("whispers-{phase}"))
-        .spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(task))
-                .map_err(|_| format!("{phase} thread panicked"));
-            let _ = tx.send(result);
-        })
-        .map_err(|err| WhsprError::Rewrite(format!("failed to spawn {phase} thread: {err}")))?;
-
-    let result = tokio::time::timeout(timeout, rx)
-        .await
-        .map_err(|_| {
-            WhsprError::Rewrite(format!("{phase} timed out after {}ms", timeout.as_millis()))
-        })?
-        .map_err(|_| WhsprError::Rewrite(format!("{phase} thread exited without a result")))?;
-
-    result.map_err(WhsprError::Rewrite)
+    .map_err(|err| WhsprError::Rewrite(err.describe("rewrite planning")))
 }
 
 fn finalize_rewrite_planning_failure(
@@ -159,6 +167,7 @@ fn finalize_rewrite_planning_failure(
             rewrite_used: false,
             recommended_candidate: None,
         },
+        degraded_reason: Some("rewrite_planning_failed".into()),
     }
 }
 
@@ -195,7 +204,7 @@ fn finalize_rewrite_attempt(
     plan: planning::RewritePlan,
     rewrite_result: crate::error::Result<String>,
 ) -> FinalizedTranscript {
-    let (base, rewrite_used) = match rewrite_result {
+    let (base, rewrite_used, degraded_reason) = match rewrite_result {
         Ok(text) if rewrite_output_accepted(config, &plan.rewrite_transcript, &text) => {
             let text =
                 canonicalize_structured_output(&plan.rewrite_transcript, &text).unwrap_or(text);
@@ -204,11 +213,15 @@ fn finalize_rewrite_attempt(
                 mode = config.postprocess.mode.as_str(),
                 "rewrite applied successfully"
             );
-            (text, true)
+            (text, true, None)
         }
         Ok(text) if text.trim().is_empty() => {
             tracing::warn!("rewrite model returned empty text; using fallback");
-            (plan.fallback_text, false)
+            (
+                plan.fallback_text,
+                false,
+                Some("rewrite_empty_output".into()),
+            )
         }
         Ok(text) => {
             tracing::warn!(
@@ -216,11 +229,19 @@ fn finalize_rewrite_attempt(
                 output_len = text.len(),
                 "rewrite output failed acceptance guard; using fallback"
             );
-            (plan.fallback_text, false)
+            (
+                plan.fallback_text,
+                false,
+                Some("rewrite_output_rejected".into()),
+            )
         }
         Err(err) => {
             tracing::warn!("rewrite failed: {err}; using fallback");
-            (plan.fallback_text, false)
+            (
+                plan.fallback_text,
+                false,
+                Some("rewrite_execution_failed".into()),
+            )
         }
     };
 
@@ -233,6 +254,7 @@ fn finalize_rewrite_attempt(
         },
         &plan.rules,
     )
+    .with_degraded_reason(degraded_reason)
     .with_operation(plan.operation)
 }
 
@@ -245,6 +267,7 @@ fn finalize_plain_text(
         text: personalization::finalize_text(&text, rules),
         operation: FinalizedOperation::Append,
         rewrite_summary,
+        degraded_reason: None,
     }
 }
 
@@ -258,12 +281,18 @@ fn finalize_unavailable_rewrite_fallback(plan: planning::RewritePlan) -> Finaliz
         },
         &plan.rules,
     )
+    .with_degraded_reason(Some("rewrite_unavailable".into()))
     .with_operation(plan.operation)
 }
 
 impl FinalizedTranscript {
     fn with_operation(mut self, operation: FinalizedOperation) -> Self {
         self.operation = operation;
+        self
+    }
+
+    fn with_degraded_reason(mut self, degraded_reason: Option<String>) -> Self {
+        self.degraded_reason = degraded_reason;
         self
     }
 }
@@ -339,6 +368,7 @@ mod tests {
     use crate::rewrite_protocol::{
         RewriteCandidate, RewriteCandidateKind, RewritePolicyContext, RewriteTranscript,
     };
+    use crate::runtime_guards::run_detached_with_timeout_async;
 
     fn plan_config(mode: PostprocessMode, backend: RewriteBackend) -> Config {
         let mut config = Config::default();
@@ -432,7 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn rewrite_thread_timeout_returns_value_when_task_finishes() {
-        let result = run_rewrite_thread_with_timeout(Duration::from_millis(50), "test task", || 7)
+        let result = run_detached_with_timeout_async(Duration::from_millis(50), "test task", || 7)
             .await
             .expect("task should finish");
 
@@ -445,19 +475,14 @@ mod tests {
         let completed_in_thread = Arc::clone(&completed);
 
         let err =
-            run_rewrite_thread_with_timeout(Duration::from_millis(10), "test task", move || {
+            run_detached_with_timeout_async(Duration::from_millis(10), "test task", move || {
                 std::thread::sleep(Duration::from_millis(50));
                 completed_in_thread.store(true, Ordering::Relaxed);
             })
             .await
             .expect_err("task should time out");
 
-        match err {
-            WhsprError::Rewrite(message) => {
-                assert!(message.contains("test task timed out after 10ms"));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_eq!(err.describe("test task"), "test task timed out after 10ms");
 
         assert!(!completed.load(Ordering::Relaxed));
     }
@@ -478,6 +503,10 @@ mod tests {
         assert_eq!(finalized.text, "raw transcript");
         assert!(!finalized.rewrite_summary.rewrite_used);
         assert_eq!(finalized.operation, FinalizedOperation::Append);
+        assert_eq!(
+            finalized.degraded_reason.as_deref(),
+            Some("rewrite_planning_failed")
+        );
     }
 
     #[test]

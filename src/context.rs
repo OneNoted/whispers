@@ -1,8 +1,13 @@
 use std::process::Command;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::runtime_guards::run_command_output_with_timeout;
+
+const CONTEXT_COMMAND_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TypingContext {
@@ -71,10 +76,7 @@ fn capture_niri_context(captured_at_ms: u64) -> Option<TypingContext> {
         return None;
     }
 
-    let output = Command::new("niri")
-        .args(["msg", "-j", "focused-window"])
-        .output()
-        .ok()?;
+    let output = run_context_command("niri", &["msg", "-j", "focused-window"])?;
     if !output.status.success() {
         return None;
     }
@@ -86,10 +88,7 @@ fn capture_niri_context(captured_at_ms: u64) -> Option<TypingContext> {
 fn capture_hyprland_context(captured_at_ms: u64) -> Option<TypingContext> {
     std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
 
-    let output = Command::new("hyprctl")
-        .args(["activewindow", "-j"])
-        .output()
-        .ok()?;
+    let output = run_context_command("hyprctl", &["activewindow", "-j"])?;
     if !output.status.success() {
         return None;
     }
@@ -129,6 +128,18 @@ fn parse_niri_focused_window_json(raw: &str, captured_at_ms: u64) -> Option<Typi
         browser_domain,
         captured_at_ms,
     })
+}
+
+fn run_context_command(program: &str, args: &[&str]) -> Option<std::process::Output> {
+    let mut command = Command::new(program);
+    command.args(args);
+    match run_command_output_with_timeout(&mut command, CONTEXT_COMMAND_TIMEOUT) {
+        Ok(output) => Some(output),
+        Err(err) => {
+            tracing::debug!("context command {program} failed: {err}");
+            None
+        }
+    }
 }
 
 fn parse_hyprland_activewindow_json(raw: &str, captured_at_ms: u64) -> Option<TypingContext> {
@@ -325,6 +336,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{EnvVarGuard, env_lock, set_env, unique_temp_dir};
 
     #[test]
     fn classify_surface_kind_detects_terminal() {
@@ -403,5 +415,27 @@ mod tests {
             context.browser_domain.as_deref(),
             Some("news.ycombinator.com")
         );
+    }
+
+    #[test]
+    fn capture_typing_context_returns_unknown_when_niri_hangs() {
+        let _env_lock = env_lock();
+        let _guard = EnvVarGuard::capture(&["PATH", "XDG_CURRENT_DESKTOP"]);
+        let bin_dir = unique_temp_dir("context-timeout-bin");
+        let niri_path = bin_dir.join("niri");
+        std::fs::write(&niri_path, "#!/bin/sh\n/bin/sleep 5\n").expect("write niri");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&niri_path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod niri");
+        }
+        set_env("PATH", bin_dir.to_str().expect("bin dir"));
+        set_env("XDG_CURRENT_DESKTOP", "niri");
+
+        let context = capture_typing_context();
+
+        assert!(!context.is_known_focus());
+        assert_eq!(context.surface_kind, SurfaceKind::Unknown);
     }
 }

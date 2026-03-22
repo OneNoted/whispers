@@ -1,9 +1,10 @@
 use crate::config::Config;
 
 use super::{CloudSetup, apply};
-use crate::config::{
-    self, RewriteBackend, RewriteFallback, TranscriptionBackend, TranscriptionFallback,
-};
+use crate::config::{self, TranscriptionBackend, TranscriptionFallback};
+
+#[cfg(not(feature = "local-rewrite"))]
+use crate::config::{RewriteBackend, RewriteFallback};
 
 #[test]
 fn runtime_selection_resets_cloud_asr_when_disabled() {

@@ -1,7 +1,12 @@
 use std::process::Child;
+use std::time::Duration;
 
 #[cfg(feature = "osd")]
 use std::process::Command;
+
+use crate::runtime_guards::wait_child_with_timeout;
+
+const OSD_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[cfg(feature = "osd")]
 pub(super) fn spawn_osd() -> Option<Child> {
@@ -38,8 +43,21 @@ pub(super) fn kill_osd(child: &mut Option<Child>) {
         unsafe {
             libc::kill(pid, libc::SIGTERM);
         }
-        let _ = c.wait();
-        tracing::debug!("whispers-osd (pid {pid}) terminated");
+        match wait_child_with_timeout(&mut c, OSD_SHUTDOWN_TIMEOUT) {
+            Ok(Some(_)) => {
+                tracing::debug!("whispers-osd (pid {pid}) terminated");
+            }
+            Ok(None) => {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                let _ = wait_child_with_timeout(&mut c, OSD_SHUTDOWN_TIMEOUT);
+                tracing::warn!("whispers-osd (pid {pid}) did not exit after SIGTERM; killed");
+            }
+            Err(err) => {
+                tracing::warn!("failed to wait for whispers-osd (pid {pid}) to exit: {err}");
+            }
+        }
     }
 }
 
