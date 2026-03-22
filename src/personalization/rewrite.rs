@@ -350,10 +350,10 @@ fn push_structured_literal_candidate(
         return;
     };
 
-    if candidates
-        .iter()
-        .any(|candidate| candidate.text == structured.normalized)
-    {
+    if candidates.iter().any(|candidate| {
+        candidate.kind == RewriteCandidateKind::StructuredLiteral
+            && candidate.text == structured.normalized
+    }) {
         return;
     }
 
@@ -924,6 +924,26 @@ mod tests {
             candidate.kind == RewriteCandidateKind::StructuredLiteral
                 && candidate.text == "portfolio.notes.supply"
         }));
+    }
+
+    #[test]
+    fn build_rewrite_transcript_keeps_structured_literal_kind_for_exact_literal_text() {
+        let transcript = Transcript {
+            raw_text: "https://Example.com/Repo?x=1#Frag".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let rewrite = build_rewrite_transcript(&transcript, &rules());
+        let kinds = rewrite
+            .rewrite_candidates
+            .iter()
+            .filter(|candidate| candidate.text == "https://Example.com/Repo?x=1#Frag")
+            .map(|candidate| candidate.kind)
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&RewriteCandidateKind::Literal));
+        assert!(kinds.contains(&RewriteCandidateKind::StructuredLiteral));
     }
 
     #[test]
