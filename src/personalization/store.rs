@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::error::{Result, WhsprError};
+use crate::safe_fs;
 
 use super::normalized_words;
 
@@ -127,7 +128,7 @@ pub(super) fn load_custom_instructions(config: &Config) -> Result<String> {
         return Ok(String::new());
     };
 
-    match std::fs::read_to_string(&path) {
+    match safe_fs::read_to_string(&path) {
         Ok(contents) => Ok(contents.trim().to_string()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(err) => Err(WhsprError::Config(format!(
@@ -142,7 +143,7 @@ pub(super) fn read_dictionary_file(path: &Path) -> Result<Vec<DictionaryEntry>> 
         return Ok(Vec::new());
     }
 
-    let contents = std::fs::read_to_string(path).map_err(|e| {
+    let contents = safe_fs::read_to_string(path).map_err(|e| {
         WhsprError::Config(format!("failed to read dictionary {}: {e}", path.display()))
     })?;
     let file: DictionaryFile = toml::from_str(&contents).map_err(|e| {
@@ -161,7 +162,7 @@ pub(super) fn write_dictionary_file(path: &Path, entries: &[DictionaryEntry]) ->
     };
     let contents = toml::to_string_pretty(&file)
         .map_err(|e| WhsprError::Config(format!("failed to encode dictionary: {e}")))?;
-    std::fs::write(path, contents).map_err(|e| {
+    safe_fs::write(path, contents).map_err(|e| {
         WhsprError::Config(format!(
             "failed to write dictionary {}: {e}",
             path.display()
@@ -175,7 +176,7 @@ pub(super) fn read_snippet_file(path: &Path) -> Result<Vec<SnippetEntry>> {
         return Ok(Vec::new());
     }
 
-    let contents = std::fs::read_to_string(path).map_err(|e| {
+    let contents = safe_fs::read_to_string(path).map_err(|e| {
         WhsprError::Config(format!("failed to read snippets {}: {e}", path.display()))
     })?;
     let file: SnippetFile = toml::from_str(&contents).map_err(|e| {
@@ -191,7 +192,7 @@ pub(super) fn write_snippet_file(path: &Path, snippets: &[SnippetEntry]) -> Resu
     };
     let contents = toml::to_string_pretty(&file)
         .map_err(|e| WhsprError::Config(format!("failed to encode snippets: {e}")))?;
-    std::fs::write(path, contents).map_err(|e| {
+    safe_fs::write(path, contents).map_err(|e| {
         WhsprError::Config(format!("failed to write snippets {}: {e}", path.display()))
     })?;
     Ok(())

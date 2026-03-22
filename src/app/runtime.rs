@@ -1,5 +1,5 @@
 use std::process::Child;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::asr;
 use crate::audio::AudioRecorder;
@@ -13,7 +13,6 @@ use crate::rewrite_worker::RewriteService;
 use crate::runtime_diagnostics::{
     DictationRuntimeDiagnostics, DictationStage, DictationStageMetadata,
 };
-use crate::runtime_guards::run_detached_with_timeout;
 use crate::session::{self, EligibleSessionEntry};
 use crate::transcribe::Transcript;
 
@@ -50,9 +49,6 @@ pub(super) struct ReadyInjection {
     injection_context: TypingContext,
 }
 
-const RUNTIME_TEXT_RESOURCES_TIMEOUT: Duration = Duration::from_secs(1);
-const SESSION_IO_TIMEOUT: Duration = Duration::from_millis(200);
-
 impl DictationRuntime {
     pub(super) fn new(config: Config, diagnostics: DictationRuntimeDiagnostics) -> Self {
         let feedback = FeedbackPlayer::new(
@@ -82,7 +78,7 @@ impl DictationRuntime {
         self.feedback.play_start();
         let recording_context = context::capture_typing_context();
         let recent_session = if self.session_enabled {
-            load_recent_session_entry_with_timeout(&self.config.session, &recording_context)
+            load_recent_session_entry_guarded(&self.config.session, &recording_context)
         } else {
             None
         };
@@ -301,7 +297,7 @@ impl DictationRuntime {
                     session_metadata.detail = Some("record_append".into());
                     self.diagnostics
                         .enter_stage(DictationStage::SessionWrite, session_metadata);
-                    record_session_append_with_timeout(
+                    record_session_append_guarded(
                         &self.config.session,
                         &injection_context,
                         &text,
@@ -322,7 +318,7 @@ impl DictationRuntime {
                     session_metadata.detail = Some("record_replace".into());
                     self.diagnostics
                         .enter_stage(DictationStage::SessionWrite, session_metadata);
-                    record_session_replace_with_timeout(
+                    record_session_replace_guarded(
                         &self.config.session,
                         &injection_context,
                         entry_id,
@@ -340,95 +336,52 @@ impl DictationRuntime {
 fn load_runtime_text_resources_or_default(
     config: &Config,
 ) -> (planning::RuntimeTextResources, Option<String>) {
-    let config = config.clone();
-    match run_detached_with_timeout(
-        RUNTIME_TEXT_RESOURCES_TIMEOUT,
-        "runtime text resources",
-        move || planning::load_runtime_text_resources(&config),
-    ) {
-        Ok(resources) => (resources, None),
-        Err(err) => {
-            let message = err.describe("runtime text resources");
-            tracing::warn!("failed to load runtime text resources: {message}; using defaults");
-            (
-                planning::RuntimeTextResources::default(),
-                Some("runtime_text_resources_unavailable".into()),
-            )
-        }
+    let (resources, degraded) = planning::load_runtime_text_resources_with_status(config);
+    if degraded {
+        (resources, Some("runtime_text_resources_unavailable".into()))
+    } else {
+        (resources, None)
     }
 }
 
-fn load_recent_session_entry_with_timeout(
+fn load_recent_session_entry_guarded(
     config: &crate::config::SessionConfig,
     context: &TypingContext,
 ) -> Option<EligibleSessionEntry> {
-    let config = config.clone();
-    let context = context.clone();
-    match run_detached_with_timeout(SESSION_IO_TIMEOUT, "session load", move || {
-        session::load_recent_entry(&config, &context)
-    }) {
-        Ok(Ok(entry)) => entry,
-        Ok(Err(err)) => {
-            tracing::warn!("failed to load recent session entry: {err}; continuing without it");
-            None
-        }
+    match session::load_recent_entry(config, context) {
+        Ok(entry) => entry,
         Err(err) => {
-            tracing::warn!(
-                "failed to load recent session entry: {}; continuing without it",
-                err.describe("session load")
-            );
+            tracing::warn!("failed to load recent session entry: {err}; continuing without it");
             None
         }
     }
 }
 
-fn record_session_append_with_timeout(
+fn record_session_append_guarded(
     config: &crate::config::SessionConfig,
     context: &TypingContext,
     text: &str,
     rewrite_summary: crate::session::SessionRewriteSummary,
 ) {
-    let config = config.clone();
-    let context = context.clone();
-    let text = text.to_string();
-    match run_detached_with_timeout(SESSION_IO_TIMEOUT, "session append", move || {
-        session::record_append(&config, &context, &text, rewrite_summary)
-    }) {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => {
-            tracing::warn!("failed to persist session append: {err}; continuing");
-        }
+    match session::record_append(config, context, text, rewrite_summary) {
+        Ok(()) => {}
         Err(err) => {
-            tracing::warn!(
-                "failed to persist session append: {}; continuing",
-                err.describe("session append")
-            );
+            tracing::warn!("failed to persist session append: {err}; continuing");
         }
     }
 }
 
-fn record_session_replace_with_timeout(
+fn record_session_replace_guarded(
     config: &crate::config::SessionConfig,
     context: &TypingContext,
     entry_id: u64,
     text: &str,
     rewrite_summary: crate::session::SessionRewriteSummary,
 ) {
-    let config = config.clone();
-    let context = context.clone();
-    let text = text.to_string();
-    match run_detached_with_timeout(SESSION_IO_TIMEOUT, "session replace", move || {
-        session::record_replace(&config, &context, entry_id, &text, rewrite_summary)
-    }) {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => {
-            tracing::warn!("failed to persist session replacement: {err}; continuing");
-        }
+    match session::record_replace(config, context, entry_id, text, rewrite_summary) {
+        Ok(()) => {}
         Err(err) => {
-            tracing::warn!(
-                "failed to persist session replacement: {}; continuing",
-                err.describe("session replace")
-            );
+            tracing::warn!("failed to persist session replacement: {err}; continuing");
         }
     }
 }
@@ -490,13 +443,13 @@ mod tests {
     }
 
     #[test]
-    fn load_recent_session_entry_times_out_for_blocking_fifo() {
+    fn load_recent_session_entry_skips_blocking_fifo() {
         with_runtime_dir(|runtime_dir| {
             let session_dir = runtime_dir.join("whispers");
             std::fs::create_dir_all(&session_dir).expect("session dir");
             mkfifo(&session_dir.join("session.json"));
 
-            let recent = load_recent_session_entry_with_timeout(
+            let recent = load_recent_session_entry_guarded(
                 &crate::config::SessionConfig::default(),
                 &typing_context(),
             );
@@ -506,13 +459,13 @@ mod tests {
     }
 
     #[test]
-    fn record_session_append_times_out_for_blocking_fifo() {
+    fn record_session_append_skips_blocking_fifo() {
         with_runtime_dir(|runtime_dir| {
             let session_dir = runtime_dir.join("whispers");
             std::fs::create_dir_all(&session_dir).expect("session dir");
             mkfifo(&session_dir.join("session.json"));
 
-            record_session_append_with_timeout(
+            record_session_append_guarded(
                 &crate::config::SessionConfig::default(),
                 &typing_context(),
                 "hello",
@@ -526,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn load_runtime_text_resources_falls_back_to_defaults_after_timeout() {
+    fn load_runtime_text_resources_falls_back_to_defaults_for_blocking_fifo() {
         let mut config = Config::default();
         config.postprocess.mode = crate::config::PostprocessMode::Rewrite;
         with_runtime_dir(|runtime_dir| {

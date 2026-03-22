@@ -1,7 +1,5 @@
 use std::io::{self, Read};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -10,133 +8,6 @@ use std::os::unix::process::CommandExt;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const KILL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
-const DETACHED_WORKER_COUNT: usize = 4;
-const DETACHED_QUEUE_CAPACITY: usize = DETACHED_WORKER_COUNT * 4;
-
-type DetachedJob = Box<dyn FnOnce() + Send + 'static>;
-
-struct DetachedTaskPool {
-    sender: mpsc::SyncSender<DetachedJob>,
-}
-
-static DETACHED_TASK_POOL: OnceLock<Result<DetachedTaskPool, String>> = OnceLock::new();
-
-#[derive(Debug)]
-pub(crate) enum TimedTaskError {
-    Spawn(io::Error),
-    Busy,
-    Timeout(Duration),
-    Panic,
-    ChannelClosed,
-}
-
-impl TimedTaskError {
-    pub(crate) fn describe(&self, phase: &str) -> String {
-        match self {
-            Self::Spawn(err) => format!("failed to start {phase} worker: {err}"),
-            Self::Busy => format!("{phase} worker pool is saturated"),
-            Self::Timeout(timeout) => format!("{phase} timed out after {}ms", timeout.as_millis()),
-            Self::Panic => format!("{phase} worker panicked"),
-            Self::ChannelClosed => format!("{phase} worker exited without a result"),
-        }
-    }
-}
-
-impl DetachedTaskPool {
-    fn submit(&self, job: DetachedJob) -> Result<(), TimedTaskError> {
-        self.sender.try_send(job).map_err(|err| match err {
-            mpsc::TrySendError::Full(_) => TimedTaskError::Busy,
-            mpsc::TrySendError::Disconnected(_) => TimedTaskError::ChannelClosed,
-        })
-    }
-}
-
-fn detached_task_pool() -> Result<&'static DetachedTaskPool, TimedTaskError> {
-    match DETACHED_TASK_POOL
-        .get_or_init(|| init_detached_task_pool().map_err(|err| err.to_string()))
-    {
-        Ok(pool) => Ok(pool),
-        Err(message) => Err(TimedTaskError::Spawn(io::Error::other(message.clone()))),
-    }
-}
-
-fn init_detached_task_pool() -> io::Result<DetachedTaskPool> {
-    let (sender, receiver) = mpsc::sync_channel::<DetachedJob>(DETACHED_QUEUE_CAPACITY);
-    let receiver = Arc::new(Mutex::new(receiver));
-
-    for index in 0..DETACHED_WORKER_COUNT {
-        let receiver = Arc::clone(&receiver);
-        thread::Builder::new()
-            .name(format!("whispers-detached-{index}"))
-            .spawn(move || detached_worker_loop(receiver))?;
-    }
-
-    Ok(DetachedTaskPool { sender })
-}
-
-fn detached_worker_loop(receiver: Arc<Mutex<mpsc::Receiver<DetachedJob>>>) {
-    loop {
-        let job = {
-            let receiver = match receiver.lock() {
-                Ok(receiver) => receiver,
-                Err(_) => return,
-            };
-            match receiver.recv() {
-                Ok(job) => job,
-                Err(_) => return,
-            }
-        };
-        job();
-    }
-}
-
-pub(crate) fn run_detached_with_timeout<T, F>(
-    timeout: Duration,
-    _phase: &'static str,
-    task: F,
-) -> Result<T, TimedTaskError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-{
-    let (tx, rx) = mpsc::sync_channel(1);
-    let job = Box::new(move || {
-        let result = catch_unwind(AssertUnwindSafe(task)).map_err(|_| TimedTaskError::Panic);
-        let _ = tx.send(result);
-    });
-    detached_task_pool()?.submit(job)?;
-
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => Err(err),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(TimedTaskError::Timeout(timeout)),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(TimedTaskError::ChannelClosed),
-    }
-}
-
-pub(crate) async fn run_detached_with_timeout_async<T, F>(
-    timeout: Duration,
-    _phase: &'static str,
-    task: F,
-) -> Result<T, TimedTaskError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-{
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let job = Box::new(move || {
-        let result = catch_unwind(AssertUnwindSafe(task)).map_err(|_| TimedTaskError::Panic);
-        let _ = tx.send(result);
-    });
-    detached_task_pool()?.submit(job)?;
-
-    match tokio::time::timeout(timeout, rx).await {
-        Ok(Ok(Ok(value))) => Ok(value),
-        Ok(Ok(Err(err))) => Err(err),
-        Ok(Err(_)) => Err(TimedTaskError::ChannelClosed),
-        Err(_) => Err(TimedTaskError::Timeout(timeout)),
-    }
-}
 
 pub(crate) fn wait_child_with_timeout(
     child: &mut Child,
@@ -248,30 +119,6 @@ mod tests {
     use crate::test_support::unique_temp_dir;
 
     #[test]
-    fn detached_timeout_returns_result() {
-        let value =
-            run_detached_with_timeout(Duration::from_millis(20), "test task", || 7).expect("ok");
-        assert_eq!(value, 7);
-    }
-
-    #[test]
-    fn detached_timeout_returns_timeout_error() {
-        let err = run_detached_with_timeout(Duration::from_millis(10), "test task", || {
-            thread::sleep(Duration::from_millis(50));
-        })
-        .expect_err("timeout");
-        assert_eq!(err.describe("test task"), "test task timed out after 10ms");
-    }
-
-    #[tokio::test]
-    async fn detached_async_timeout_returns_result() {
-        let value = run_detached_with_timeout_async(Duration::from_millis(20), "async task", || 9)
-            .await
-            .expect("ok");
-        assert_eq!(value, 9);
-    }
-
-    #[test]
     fn command_output_timeout_captures_successful_output() {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "printf 'hello'; printf 'warn' >&2"]);
@@ -285,7 +132,7 @@ mod tests {
     #[test]
     fn command_output_timeout_kills_hung_process() {
         let mut command = Command::new("/bin/sh");
-        command.args(["-c", "sleep 5"]);
+        command.args(["-c", "/bin/sleep 5"]);
         let err = run_command_output_with_timeout(&mut command, Duration::from_millis(20))
             .expect_err("timeout");
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
@@ -295,7 +142,7 @@ mod tests {
     fn command_output_timeout_kills_shell_descendants_holding_pipes_open() {
         let temp_dir = unique_temp_dir("runtime-guards-output-timeout");
         let pid_path = temp_dir.join("child.pid");
-        let script = format!("sleep 5 & echo $! > '{}' ; wait", pid_path.display());
+        let script = format!("/bin/sleep 5 & echo $! > '{}' ; wait", pid_path.display());
         let mut command = Command::new("/bin/sh");
         command.args(["-c", &script]);
 
@@ -331,7 +178,7 @@ mod tests {
     #[test]
     fn command_status_timeout_kills_hung_process() {
         let mut command = Command::new("/bin/sh");
-        command.args(["-c", "sleep 5"]);
+        command.args(["-c", "/bin/sleep 5"]);
         let err = run_command_status_with_timeout(&mut command, Duration::from_millis(20))
             .expect_err("timeout");
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
@@ -341,7 +188,7 @@ mod tests {
     fn command_status_timeout_kills_shell_descendants() {
         let temp_dir = unique_temp_dir("runtime-guards-status-timeout");
         let pid_path = temp_dir.join("child.pid");
-        let script = format!("sleep 5 & echo $! > '{}' ; wait", pid_path.display());
+        let script = format!("/bin/sleep 5 & echo $! > '{}' ; wait", pid_path.display());
         let mut command = Command::new("/bin/sh");
         command.args(["-c", &script]);
 

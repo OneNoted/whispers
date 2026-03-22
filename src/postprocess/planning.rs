@@ -44,21 +44,32 @@ pub(crate) fn resolve_rewrite_model_path(config: &Config) -> Option<PathBuf> {
     rewrite_model::selected_model_path(&config.rewrite.selected_model)
 }
 
-pub(crate) fn load_runtime_rules(config: &Config) -> PersonalizationRules {
+pub(crate) fn load_runtime_rules_with_status(config: &Config) -> (PersonalizationRules, bool) {
     match personalization::load_rules(config) {
-        Ok(rules) => rules,
+        Ok(rules) => (rules, false),
         Err(err) => {
             tracing::warn!("failed to load personalization rules: {err}");
-            PersonalizationRules::default()
+            (PersonalizationRules::default(), true)
         }
     }
 }
 
 pub fn load_runtime_text_resources(config: &Config) -> RuntimeTextResources {
-    RuntimeTextResources {
-        rules: load_runtime_rules(config),
-        runtime_policy: agentic_rewrite::load_runtime_resources(config),
-    }
+    load_runtime_text_resources_with_status(config).0
+}
+
+pub fn load_runtime_text_resources_with_status(config: &Config) -> (RuntimeTextResources, bool) {
+    let (rules, rules_degraded) = load_runtime_rules_with_status(config);
+    let (runtime_policy, policy_degraded) =
+        agentic_rewrite::load_runtime_resources_with_status(config);
+
+    (
+        RuntimeTextResources {
+            rules,
+            runtime_policy,
+        },
+        rules_degraded || policy_degraded,
+    )
 }
 
 pub(crate) fn build_rewrite_plan(

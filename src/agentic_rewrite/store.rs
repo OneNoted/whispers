@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::error::{Result, WhsprError};
+use crate::safe_fs;
 
 use super::{AppRule, GlossaryEntry};
 
@@ -101,7 +102,7 @@ fn ensure_text_file(path: &Path, contents: &str) -> Result<bool> {
     }
 
     write_parent(path)?;
-    std::fs::write(path, contents).map_err(|e| {
+    safe_fs::write(path, contents).map_err(|e| {
         WhsprError::Config(format!(
             "failed to write starter file {}: {e}",
             path.display()
@@ -115,7 +116,7 @@ pub(super) fn read_policy_file(path: &Path) -> Result<Vec<AppRule>> {
         return Ok(Vec::new());
     }
 
-    let contents = std::fs::read_to_string(path).map_err(|e| {
+    let contents = safe_fs::read_to_string(path).map_err(|e| {
         WhsprError::Config(format!("failed to read app rules {}: {e}", path.display()))
     })?;
     if contents.trim().is_empty() {
@@ -133,7 +134,7 @@ pub(super) fn write_policy_file(path: &Path, rules: &[AppRule]) -> Result<()> {
         rules: rules.to_vec(),
     })
     .map_err(|e| WhsprError::Config(format!("failed to encode app rules: {e}")))?;
-    std::fs::write(path, contents).map_err(|e| {
+    safe_fs::write(path, contents).map_err(|e| {
         WhsprError::Config(format!("failed to write app rules {}: {e}", path.display()))
     })?;
     Ok(())
@@ -144,7 +145,7 @@ pub(super) fn read_glossary_file(path: &Path) -> Result<Vec<GlossaryEntry>> {
         return Ok(Vec::new());
     }
 
-    let contents = std::fs::read_to_string(path).map_err(|e| {
+    let contents = safe_fs::read_to_string(path).map_err(|e| {
         WhsprError::Config(format!("failed to read glossary {}: {e}", path.display()))
     })?;
     if contents.trim().is_empty() {
@@ -162,28 +163,30 @@ pub(super) fn write_glossary_file(path: &Path, entries: &[GlossaryEntry]) -> Res
         entries: entries.to_vec(),
     })
     .map_err(|e| WhsprError::Config(format!("failed to encode glossary: {e}")))?;
-    std::fs::write(path, contents).map_err(|e| {
+    safe_fs::write(path, contents).map_err(|e| {
         WhsprError::Config(format!("failed to write glossary {}: {e}", path.display()))
     })?;
     Ok(())
 }
 
-pub(super) fn load_policy_file_for_runtime(path: &Path) -> Vec<AppRule> {
+pub(super) fn load_policy_file_for_runtime_with_status(path: &Path) -> (Vec<AppRule>, bool) {
     match read_policy_file(path) {
-        Ok(rules) => rules,
+        Ok(rules) => (rules, false),
         Err(err) => {
             tracing::warn!("{err}; using built-in app rewrite defaults");
-            Vec::new()
+            (Vec::new(), true)
         }
     }
 }
 
-pub(super) fn load_glossary_file_for_runtime(path: &Path) -> Vec<GlossaryEntry> {
+pub(super) fn load_glossary_file_for_runtime_with_status(
+    path: &Path,
+) -> (Vec<GlossaryEntry>, bool) {
     match read_glossary_file(path) {
-        Ok(entries) => entries,
+        Ok(entries) => (entries, false),
         Err(err) => {
             tracing::warn!("{err}; ignoring runtime glossary");
-            Vec::new()
+            (Vec::new(), true)
         }
     }
 }

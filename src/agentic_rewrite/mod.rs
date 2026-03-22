@@ -63,12 +63,24 @@ pub fn default_glossary_path() -> &'static str {
 }
 
 pub(crate) fn load_runtime_resources(config: &Config) -> RuntimePolicyResources {
-    RuntimePolicyResources {
-        policy_rules: store::load_policy_file_for_runtime(&config.resolved_rewrite_policy_path()),
-        glossary_entries: store::load_glossary_file_for_runtime(
-            &config.resolved_rewrite_glossary_path(),
-        ),
-    }
+    load_runtime_resources_with_status(config).0
+}
+
+pub(crate) fn load_runtime_resources_with_status(
+    config: &Config,
+) -> (RuntimePolicyResources, bool) {
+    let (policy_rules, policy_degraded) =
+        store::load_policy_file_for_runtime_with_status(&config.resolved_rewrite_policy_path());
+    let (glossary_entries, glossary_degraded) =
+        store::load_glossary_file_for_runtime_with_status(&config.resolved_rewrite_glossary_path());
+
+    (
+        RuntimePolicyResources {
+            policy_rules,
+            glossary_entries,
+        },
+        policy_degraded || glossary_degraded,
+    )
 }
 
 pub fn apply_runtime_policy(config: &Config, transcript: &mut RewriteTranscript) {

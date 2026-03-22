@@ -1,5 +1,10 @@
 use std::time::Duration;
 use std::time::Instant;
+use std::{
+    io,
+    panic::{AssertUnwindSafe, catch_unwind},
+    thread,
+};
 
 use crate::agentic_rewrite;
 use crate::config::{Config, PostprocessMode, RewriteBackend, RewriteFallback};
@@ -8,7 +13,6 @@ use crate::error::WhsprError;
 use crate::personalization::{self, PersonalizationRules};
 use crate::rewrite_protocol::{RewriteCandidateKind, RewriteCorrectionPolicy, RewriteTranscript};
 use crate::rewrite_worker::RewriteService;
-use crate::runtime_guards::run_detached_with_timeout_async;
 use crate::session::{EligibleSessionEntry, SessionRewriteSummary};
 use crate::structured_text;
 use crate::transcribe::Transcript;
@@ -16,8 +20,26 @@ use crate::transcribe::Transcript;
 use super::{execution, planning};
 
 const FEEDBACK_DRAIN_DELAY: Duration = Duration::from_millis(150);
-const RUNTIME_TEXT_RESOURCES_TIMEOUT: Duration = Duration::from_secs(1);
 const REWRITE_PLAN_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug)]
+enum TimedPlanningError {
+    Spawn(io::Error),
+    Timeout(Duration),
+    Panic,
+    ChannelClosed,
+}
+
+impl TimedPlanningError {
+    fn describe(&self, phase: &str) -> String {
+        match self {
+            Self::Spawn(err) => format!("failed to start {phase} worker: {err}"),
+            Self::Timeout(timeout) => format!("{phase} timed out after {}ms", timeout.as_millis()),
+            Self::Panic => format!("{phase} worker panicked"),
+            Self::ChannelClosed => format!("{phase} worker exited without a result"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalizedOperation {
@@ -107,23 +129,11 @@ async fn load_runtime_text_resources_or_default(
         return resources.clone();
     }
 
-    let config = config.clone();
-    match run_detached_with_timeout_async(
-        RUNTIME_TEXT_RESOURCES_TIMEOUT,
-        "runtime text resources",
-        move || planning::load_runtime_text_resources(&config),
-    )
-    .await
-    {
-        Ok(resources) => resources,
-        Err(err) => {
-            tracing::warn!(
-                "failed to load runtime text resources: {}; using defaults",
-                err.describe("runtime text resources")
-            );
-            planning::RuntimeTextResources::default()
-        }
+    let (resources, degraded) = planning::load_runtime_text_resources_with_status(config);
+    if degraded {
+        tracing::warn!("failed to load runtime text resources; using available defaults");
     }
+    resources
 }
 
 async fn build_rewrite_plan_with_timeout(
@@ -139,7 +149,7 @@ async fn build_rewrite_plan_with_timeout(
     let typing_context = typing_context.cloned();
     let recent_session = recent_session.cloned();
 
-    run_detached_with_timeout_async(REWRITE_PLAN_TIMEOUT, "rewrite planning", move || {
+    run_rewrite_task_with_timeout(REWRITE_PLAN_TIMEOUT, "rewrite planning", move || {
         let runtime_resources =
             runtime_resources.unwrap_or_else(|| planning::load_runtime_text_resources(&config));
         planning::build_rewrite_plan(
@@ -152,6 +162,35 @@ async fn build_rewrite_plan_with_timeout(
     })
     .await
     .map_err(|err| WhsprError::Rewrite(err.describe("rewrite planning")))
+}
+
+async fn run_rewrite_task_with_timeout<T, F>(
+    timeout: Duration,
+    phase: &'static str,
+    task: F,
+) -> Result<T, TimedPlanningError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // Rewrite planning runs at most once per dictation process, so a dedicated
+    // thread avoids head-of-line blocking from unrelated timeout-guarded work.
+    thread::Builder::new()
+        .name(format!("whispers-{}", phase.replace(' ', "-")))
+        .spawn(move || {
+            let result =
+                catch_unwind(AssertUnwindSafe(task)).map_err(|_| TimedPlanningError::Panic);
+            let _ = tx.send(result);
+        })
+        .map_err(TimedPlanningError::Spawn)?;
+
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(Ok(Err(err))) => Err(err),
+        Ok(Err(_)) => Err(TimedPlanningError::ChannelClosed),
+        Err(_) => Err(TimedPlanningError::Timeout(timeout)),
+    }
 }
 
 fn finalize_rewrite_planning_failure(
@@ -368,8 +407,6 @@ mod tests {
     use crate::rewrite_protocol::{
         RewriteCandidate, RewriteCandidateKind, RewritePolicyContext, RewriteTranscript,
     };
-    use crate::runtime_guards::run_detached_with_timeout_async;
-
     fn plan_config(mode: PostprocessMode, backend: RewriteBackend) -> Config {
         let mut config = Config::default();
         config.postprocess.mode = mode;
@@ -462,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn rewrite_thread_timeout_returns_value_when_task_finishes() {
-        let result = run_detached_with_timeout_async(Duration::from_millis(50), "test task", || 7)
+        let result = run_rewrite_task_with_timeout(Duration::from_millis(50), "test task", || 7)
             .await
             .expect("task should finish");
 
@@ -475,7 +512,7 @@ mod tests {
         let completed_in_thread = Arc::clone(&completed);
 
         let err =
-            run_detached_with_timeout_async(Duration::from_millis(10), "test task", move || {
+            run_rewrite_task_with_timeout(Duration::from_millis(10), "test task", move || {
                 std::thread::sleep(Duration::from_millis(50));
                 completed_in_thread.store(true, Ordering::Relaxed);
             })

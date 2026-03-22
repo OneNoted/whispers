@@ -29,6 +29,7 @@ pub mod rewrite_worker;
 pub(crate) mod runtime_diagnostics;
 pub(crate) mod runtime_guards;
 pub mod runtime_support;
+pub(crate) mod safe_fs;
 pub mod session;
 pub mod setup;
 pub(crate) mod structured_text;

@@ -7,6 +7,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::config::SessionConfig;
 use crate::context::TypingContext;
 use crate::error::{Result, WhsprError};
+use crate::safe_fs;
 
 use super::{EligibleSessionEntry, SessionEntry, SessionRewriteSummary};
 
@@ -114,7 +115,7 @@ fn load_session_file() -> Result<SessionFile> {
         return Ok(SessionFile::default());
     }
 
-    let contents = std::fs::read_to_string(&path).map_err(|e| {
+    let contents = safe_fs::read_to_string(&path).map_err(|e| {
         WhsprError::Config(format!(
             "failed to read session state {}: {e}",
             path.display()
@@ -140,7 +141,7 @@ fn persist_session_file(state: &SessionFile) -> Result<()> {
     }
     let encoded = serde_json::to_vec(state)
         .map_err(|e| WhsprError::Config(format!("failed to encode session state: {e}")))?;
-    std::fs::write(&path, encoded).map_err(|e| {
+    safe_fs::write(&path, encoded).map_err(|e| {
         WhsprError::Config(format!(
             "failed to write session state {}: {e}",
             path.display()
