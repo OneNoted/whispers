@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, RewriteBackend, TranscriptionBackend};
 use crate::runtime_guards::run_command_output_with_timeout;
+use crate::safe_fs;
 
 const STATUS_FILE_NAME: &str = "main-status.json";
 const HANG_DEBUG_ENV: &str = "WHISPERS_HANG_DEBUG";
@@ -247,7 +248,7 @@ impl DictationRuntimeDiagnostics {
             }
         };
 
-        if let Err(err) = std::fs::write(&self.status_path, encoded) {
+        if let Err(err) = safe_fs::write(&self.status_path, encoded) {
             tracing::warn!(
                 "failed to write dictation runtime status {}: {err}",
                 self.status_path.display()
@@ -427,7 +428,7 @@ fn write_hang_bundle(
     body.push('\n');
     body.push_str(&capture_lsof(snapshot.pid, command_timeout));
 
-    std::fs::write(&bundle_path, body)?;
+    safe_fs::write(&bundle_path, body)?;
     tracing::warn!(
         path = %bundle_path.display(),
         stage = stage.as_str(),
@@ -574,6 +575,9 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::test_support::{EnvVarGuard, env_lock, set_env, unique_temp_dir};
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::FileTypeExt;
     use std::os::unix::fs::PermissionsExt;
 
     fn with_runtime_dir<T>(f: impl FnOnce() -> T) -> T {
@@ -585,6 +589,17 @@ mod tests {
             .expect("temp runtime dir should be valid UTF-8");
         set_env("XDG_RUNTIME_DIR", runtime_dir);
         f()
+    }
+
+    fn mkfifo(path: &Path) {
+        let c_path = CString::new(path.as_os_str().as_bytes()).expect("fifo path");
+        let result = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(
+            result,
+            0,
+            "mkfifo failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     #[test]
@@ -636,6 +651,35 @@ mod tests {
                 assert!(status_path.exists());
             }
 
+            assert!(!status_path.exists());
+        });
+    }
+
+    #[test]
+    fn status_file_write_skips_fifo_target() {
+        with_runtime_dir(|| {
+            let status_path = status_file_path();
+            std::fs::create_dir_all(status_path.parent().expect("runtime dir"))
+                .expect("create runtime dir");
+            mkfifo(&status_path);
+
+            let started = std::time::Instant::now();
+            let diagnostics = DictationRuntimeDiagnostics::new(&Config::default());
+            diagnostics.enter_stage(DictationStage::Recording, DictationStageMetadata::default());
+
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "status snapshot writes should not block on FIFOs"
+            );
+            assert!(
+                std::fs::metadata(&status_path)
+                    .expect("status path metadata")
+                    .file_type()
+                    .is_fifo(),
+                "status snapshot target should remain the original FIFO"
+            );
+
+            diagnostics.clear_with_stage(DictationStage::Done);
             assert!(!status_path.exists());
         });
     }
