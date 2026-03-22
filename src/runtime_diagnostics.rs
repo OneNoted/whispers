@@ -722,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn watchdog_does_not_fire_after_stage_advances() {
+    fn watchdog_does_not_fire_after_advancing_to_untimed_stage() {
         with_runtime_dir(|| {
             let diagnostics = DictationRuntimeDiagnostics::new_with_watchdog_config(
                 &Config::default(),
@@ -743,7 +743,7 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
             diagnostics.enter_stage(
-                DictationStage::Postprocess,
+                DictationStage::RecordingStopped,
                 DictationStageMetadata {
                     transcript_chars: Some(12),
                     ..DictationStageMetadata::default()
