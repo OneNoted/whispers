@@ -104,7 +104,6 @@ fn kill_child_with_descendants(child: &mut Child) {
         // wrappers and background descendants cannot keep inherited pipes open
         // past the timeout.
         let _ = unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
-        return;
     }
 
     #[cfg(not(unix))]
@@ -212,11 +211,11 @@ mod tests {
         {
             let result = unsafe { libc::kill(pid, 0) };
             if result == 0 {
-                return false;
+                false
+            } else {
+                let err = io::Error::last_os_error();
+                err.raw_os_error() == Some(libc::ESRCH)
             }
-
-            let err = io::Error::last_os_error();
-            return err.raw_os_error() == Some(libc::ESRCH);
         }
 
         #[cfg(not(unix))]
