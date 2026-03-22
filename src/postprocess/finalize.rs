@@ -1,18 +1,45 @@
 use std::time::Duration;
 use std::time::Instant;
+use std::{
+    io,
+    panic::{AssertUnwindSafe, catch_unwind},
+    thread,
+};
 
 use crate::agentic_rewrite;
 use crate::config::{Config, PostprocessMode, RewriteBackend, RewriteFallback};
 use crate::context::TypingContext;
+use crate::error::WhsprError;
 use crate::personalization::{self, PersonalizationRules};
-use crate::rewrite_protocol::{RewriteCorrectionPolicy, RewriteTranscript};
+use crate::rewrite_protocol::{RewriteCandidateKind, RewriteCorrectionPolicy, RewriteTranscript};
 use crate::rewrite_worker::RewriteService;
 use crate::session::{EligibleSessionEntry, SessionRewriteSummary};
+use crate::structured_text;
 use crate::transcribe::Transcript;
 
 use super::{execution, planning};
 
 const FEEDBACK_DRAIN_DELAY: Duration = Duration::from_millis(150);
+const REWRITE_PLAN_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug)]
+enum TimedPlanningError {
+    Spawn(io::Error),
+    Timeout(Duration),
+    Panic,
+    ChannelClosed,
+}
+
+impl TimedPlanningError {
+    fn describe(&self, phase: &str) -> String {
+        match self {
+            Self::Spawn(err) => format!("failed to start {phase} worker: {err}"),
+            Self::Timeout(timeout) => format!("{phase} timed out after {}ms", timeout.as_millis()),
+            Self::Panic => format!("{phase} worker panicked"),
+            Self::ChannelClosed => format!("{phase} worker exited without a result"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalizedOperation {
@@ -28,19 +55,21 @@ pub struct FinalizedTranscript {
     pub text: String,
     pub operation: FinalizedOperation,
     pub rewrite_summary: SessionRewriteSummary,
+    pub degraded_reason: Option<String>,
 }
 
 pub async fn finalize_transcript(
     config: &Config,
     transcript: Transcript,
     rewrite_service: Option<&RewriteService>,
+    runtime_resources: Option<&planning::RuntimeTextResources>,
     typing_context: Option<&TypingContext>,
     recent_session: Option<&EligibleSessionEntry>,
 ) -> FinalizedTranscript {
     let started = Instant::now();
     let finalized = match config.postprocess.mode {
         PostprocessMode::Raw => {
-            let rules = planning::load_runtime_rules(config);
+            let resources = load_runtime_text_resources_or_default(config, runtime_resources).await;
             finalize_plain_text(
                 planning::raw_text(&transcript),
                 SessionRewriteSummary {
@@ -48,11 +77,11 @@ pub async fn finalize_transcript(
                     rewrite_used: false,
                     recommended_candidate: None,
                 },
-                &rules,
+                &resources.rules,
             )
         }
         PostprocessMode::LegacyBasic => {
-            let rules = planning::load_runtime_rules(config);
+            let resources = load_runtime_text_resources_or_default(config, runtime_resources).await;
             finalize_plain_text(
                 crate::cleanup::clean_transcript(&transcript, &config.cleanup),
                 SessionRewriteSummary {
@@ -60,16 +89,22 @@ pub async fn finalize_transcript(
                     rewrite_used: false,
                     recommended_candidate: None,
                 },
-                &rules,
+                &resources.rules,
             )
         }
         PostprocessMode::Rewrite => {
-            finalize_rewrite_plan_or_fallback(
+            match build_rewrite_plan_with_timeout(
                 config,
-                rewrite_service,
-                planning::build_rewrite_plan(config, &transcript, typing_context, recent_session),
+                runtime_resources,
+                &transcript,
+                typing_context,
+                recent_session,
             )
             .await
+            {
+                Ok(plan) => finalize_rewrite_plan_or_fallback(config, rewrite_service, plan).await,
+                Err(err) => finalize_rewrite_planning_failure(&transcript, &err),
+            }
         }
     };
     tracing::info!(
@@ -84,6 +119,95 @@ pub async fn finalize_transcript(
 
 pub async fn wait_for_feedback_drain() {
     tokio::time::sleep(FEEDBACK_DRAIN_DELAY).await;
+}
+
+async fn load_runtime_text_resources_or_default(
+    config: &Config,
+    runtime_resources: Option<&planning::RuntimeTextResources>,
+) -> planning::RuntimeTextResources {
+    if let Some(resources) = runtime_resources {
+        return resources.clone();
+    }
+
+    let (resources, degraded) = planning::load_runtime_text_resources_with_status(config);
+    if degraded {
+        tracing::warn!("failed to load runtime text resources; using available defaults");
+    }
+    resources
+}
+
+async fn build_rewrite_plan_with_timeout(
+    config: &Config,
+    runtime_resources: Option<&planning::RuntimeTextResources>,
+    transcript: &Transcript,
+    typing_context: Option<&TypingContext>,
+    recent_session: Option<&EligibleSessionEntry>,
+) -> crate::error::Result<planning::RewritePlan> {
+    let config = config.clone();
+    let runtime_resources = runtime_resources.cloned();
+    let transcript = transcript.clone();
+    let typing_context = typing_context.cloned();
+    let recent_session = recent_session.cloned();
+
+    run_rewrite_task_with_timeout(REWRITE_PLAN_TIMEOUT, "rewrite planning", move || {
+        let runtime_resources =
+            runtime_resources.unwrap_or_else(|| planning::load_runtime_text_resources(&config));
+        planning::build_rewrite_plan(
+            &config,
+            &runtime_resources,
+            &transcript,
+            typing_context.as_ref(),
+            recent_session.as_ref(),
+        )
+    })
+    .await
+    .map_err(|err| WhsprError::Rewrite(err.describe("rewrite planning")))
+}
+
+async fn run_rewrite_task_with_timeout<T, F>(
+    timeout: Duration,
+    phase: &'static str,
+    task: F,
+) -> Result<T, TimedPlanningError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // Rewrite planning runs at most once per dictation process, so a dedicated
+    // thread avoids head-of-line blocking from unrelated timeout-guarded work.
+    thread::Builder::new()
+        .name(format!("whispers-{}", phase.replace(' ', "-")))
+        .spawn(move || {
+            let result =
+                catch_unwind(AssertUnwindSafe(task)).map_err(|_| TimedPlanningError::Panic);
+            let _ = tx.send(result);
+        })
+        .map_err(TimedPlanningError::Spawn)?;
+
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(Ok(Err(err))) => Err(err),
+        Ok(Err(_)) => Err(TimedPlanningError::ChannelClosed),
+        Err(_) => Err(TimedPlanningError::Timeout(timeout)),
+    }
+}
+
+fn finalize_rewrite_planning_failure(
+    transcript: &Transcript,
+    err: &crate::error::WhsprError,
+) -> FinalizedTranscript {
+    tracing::warn!("rewrite planning failed: {err}; using raw transcript fallback");
+    FinalizedTranscript {
+        text: planning::raw_text(transcript),
+        operation: FinalizedOperation::Append,
+        rewrite_summary: SessionRewriteSummary {
+            had_edit_cues: false,
+            rewrite_used: false,
+            recommended_candidate: None,
+        },
+        degraded_reason: Some("rewrite_planning_failed".into()),
+    }
 }
 
 async fn finalize_rewrite_plan_or_fallback(
@@ -119,18 +243,24 @@ fn finalize_rewrite_attempt(
     plan: planning::RewritePlan,
     rewrite_result: crate::error::Result<String>,
 ) -> FinalizedTranscript {
-    let (base, rewrite_used) = match rewrite_result {
+    let (base, rewrite_used, degraded_reason) = match rewrite_result {
         Ok(text) if rewrite_output_accepted(config, &plan.rewrite_transcript, &text) => {
+            let text =
+                canonicalize_structured_output(&plan.rewrite_transcript, &text).unwrap_or(text);
             tracing::debug!(
                 output_len = text.len(),
                 mode = config.postprocess.mode.as_str(),
                 "rewrite applied successfully"
             );
-            (text, true)
+            (text, true, None)
         }
         Ok(text) if text.trim().is_empty() => {
             tracing::warn!("rewrite model returned empty text; using fallback");
-            (plan.fallback_text, false)
+            (
+                plan.fallback_text,
+                false,
+                Some("rewrite_empty_output".into()),
+            )
         }
         Ok(text) => {
             tracing::warn!(
@@ -138,11 +268,19 @@ fn finalize_rewrite_attempt(
                 output_len = text.len(),
                 "rewrite output failed acceptance guard; using fallback"
             );
-            (plan.fallback_text, false)
+            (
+                plan.fallback_text,
+                false,
+                Some("rewrite_output_rejected".into()),
+            )
         }
         Err(err) => {
             tracing::warn!("rewrite failed: {err}; using fallback");
-            (plan.fallback_text, false)
+            (
+                plan.fallback_text,
+                false,
+                Some("rewrite_execution_failed".into()),
+            )
         }
     };
 
@@ -155,6 +293,7 @@ fn finalize_rewrite_attempt(
         },
         &plan.rules,
     )
+    .with_degraded_reason(degraded_reason)
     .with_operation(plan.operation)
 }
 
@@ -167,6 +306,7 @@ fn finalize_plain_text(
         text: personalization::finalize_text(&text, rules),
         operation: FinalizedOperation::Append,
         rewrite_summary,
+        degraded_reason: None,
     }
 }
 
@@ -180,12 +320,18 @@ fn finalize_unavailable_rewrite_fallback(plan: planning::RewritePlan) -> Finaliz
         },
         &plan.rules,
     )
+    .with_degraded_reason(Some("rewrite_unavailable".into()))
     .with_operation(plan.operation)
 }
 
 impl FinalizedTranscript {
     fn with_operation(mut self, operation: FinalizedOperation) -> Self {
         self.operation = operation;
+        self
+    }
+
+    fn with_degraded_reason(mut self, degraded_reason: Option<String>) -> Self {
+        self.degraded_reason = degraded_reason;
         self
     }
 }
@@ -199,6 +345,15 @@ fn rewrite_output_accepted(
         return false;
     }
 
+    if let Some(candidate) = strict_structured_literal_candidate(rewrite_transcript) {
+        return structured_text::output_matches_candidate(text, candidate);
+    }
+    if structured_literal_candidate(rewrite_transcript)
+        .is_some_and(|candidate| structured_text::output_matches_candidate(text, candidate))
+    {
+        return false;
+    }
+
     match rewrite_transcript.policy_context.correction_policy {
         RewriteCorrectionPolicy::Conservative => {
             agentic_rewrite::conservative_output_allowed(rewrite_transcript, text)
@@ -207,15 +362,51 @@ fn rewrite_output_accepted(
     }
 }
 
+fn structured_literal_candidate(rewrite_transcript: &RewriteTranscript) -> Option<&str> {
+    rewrite_transcript
+        .rewrite_candidates
+        .iter()
+        .find(|candidate| candidate.kind == RewriteCandidateKind::StructuredLiteral)
+        .map(|candidate| candidate.text.as_str())
+}
+
+fn strict_structured_literal_candidate(rewrite_transcript: &RewriteTranscript) -> Option<&str> {
+    let candidate = structured_literal_candidate(rewrite_transcript)?;
+    structured_literal_source_matches_candidate(rewrite_transcript, candidate).then_some(candidate)
+}
+
+fn structured_literal_source_matches_candidate(
+    rewrite_transcript: &RewriteTranscript,
+    candidate: &str,
+) -> bool {
+    [
+        Some(rewrite_transcript.raw_text.as_str()),
+        Some(rewrite_transcript.correction_aware_text.as_str()),
+        rewrite_transcript.aggressive_correction_text.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|text| structured_text::output_matches_candidate(text, candidate))
+}
+
+fn canonicalize_structured_output(
+    rewrite_transcript: &RewriteTranscript,
+    text: &str,
+) -> Option<String> {
+    let candidate = strict_structured_literal_candidate(rewrite_transcript)?;
+    structured_text::output_matches_candidate(text, candidate).then(|| candidate.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
     use crate::rewrite_protocol::{
         RewriteCandidate, RewriteCandidateKind, RewritePolicyContext, RewriteTranscript,
     };
-
     fn plan_config(mode: PostprocessMode, backend: RewriteBackend) -> Config {
         let mut config = Config::default();
         config.postprocess.mode = mode;
@@ -304,5 +495,202 @@ mod tests {
 
         assert_eq!(finalized.text, "fallback text");
         assert!(!finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[tokio::test]
+    async fn rewrite_thread_timeout_returns_value_when_task_finishes() {
+        let result = run_rewrite_task_with_timeout(Duration::from_millis(50), "test task", || 7)
+            .await
+            .expect("task should finish");
+
+        assert_eq!(result, 7);
+    }
+
+    #[tokio::test]
+    async fn rewrite_thread_timeout_returns_error_when_task_hangs() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_thread = Arc::clone(&completed);
+
+        let err =
+            run_rewrite_task_with_timeout(Duration::from_millis(10), "test task", move || {
+                std::thread::sleep(Duration::from_millis(50));
+                completed_in_thread.store(true, Ordering::Relaxed);
+            })
+            .await
+            .expect_err("task should time out");
+
+        assert_eq!(err.describe("test task"), "test task timed out after 10ms");
+
+        assert!(!completed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn rewrite_planning_failure_falls_back_to_trimmed_raw_text() {
+        let transcript = Transcript {
+            raw_text: "  raw transcript  ".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let finalized = finalize_rewrite_planning_failure(
+            &transcript,
+            &WhsprError::Rewrite("rewrite planning timed out after 5000ms".into()),
+        );
+
+        assert_eq!(finalized.text, "raw transcript");
+        assert!(!finalized.rewrite_summary.rewrite_used);
+        assert_eq!(finalized.operation, FinalizedOperation::Append);
+        assert_eq!(
+            finalized.degraded_reason.as_deref(),
+            Some("rewrite_planning_failed")
+        );
+    }
+
+    #[test]
+    fn structured_literal_meta_wrapper_is_canonicalized() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.rewrite_transcript.raw_text = "portfolio. Notes. Supply".into();
+        plan.rewrite_transcript.correction_aware_text = "portfolio. Notes. Supply".into();
+        plan.fallback_text = "portfolio.notes.supply".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        }];
+
+        let finalized = finalize_rewrite_attempt(
+            &config,
+            plan,
+            Ok("portfolio. Notes. Supply is the URL".into()),
+        );
+
+        assert_eq!(finalized.text, "portfolio.notes.supply");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn structured_literal_url_with_query_and_fragment_meta_wrapper_is_canonicalized() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.rewrite_transcript.raw_text = "https://example.com/?q=test&lang=en#frag".into();
+        plan.rewrite_transcript.correction_aware_text =
+            "https://example.com/?q=test&lang=en#frag".into();
+        plan.fallback_text = "https://example.com/?q=test&lang=en#frag".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "https://example.com/?q=test&lang=en#frag".into(),
+        }];
+
+        let finalized = finalize_rewrite_attempt(
+            &config,
+            plan,
+            Ok("https://example.com/?q=test&lang=en#frag is the URL".into()),
+        );
+
+        assert_eq!(finalized.text, "https://example.com/?q=test&lang=en#frag");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn exact_structured_literal_still_canonicalizes_meta_wrapped_rewrite_output() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let transcript = Transcript {
+            raw_text: "https://Example.com/Repo?x=1#Frag".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+        let plan = planning::build_rewrite_plan(
+            &config,
+            &planning::load_runtime_text_resources(&config),
+            &transcript,
+            None,
+            None,
+        );
+
+        let finalized = finalize_rewrite_attempt(
+            &config,
+            plan,
+            Ok("the URL is https://Example.com/Repo?x=1#Frag".into()),
+        );
+
+        assert_eq!(finalized.text, "https://Example.com/Repo?x=1#Frag");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn prefixed_structured_literal_still_canonicalizes_meta_wrapped_rewrite_output() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let transcript = Transcript {
+            raw_text: "/api/v1".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+        let plan = planning::build_rewrite_plan(
+            &config,
+            &planning::load_runtime_text_resources(&config),
+            &transcript,
+            None,
+            None,
+        );
+
+        let finalized = finalize_rewrite_attempt(&config, plan, Ok("URL: /api/v1".into()));
+
+        assert_eq!(finalized.text, "/api/v1");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn structured_literal_output_is_canonicalized_when_accepted() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.rewrite_transcript.raw_text = "portfolio. Notes. Supply".into();
+        plan.rewrite_transcript.correction_aware_text = "portfolio. Notes. Supply".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        }];
+
+        let finalized =
+            finalize_rewrite_attempt(&config, plan, Ok("portfolio . notes . supply".into()));
+
+        assert_eq!(finalized.text, "portfolio.notes.supply");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn structured_literal_embedded_sentence_rejects_lossy_candidate_only_output() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.fallback_text = "Check portfolio. Notes. Supply tomorrow".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        }];
+
+        let finalized =
+            finalize_rewrite_attempt(&config, plan, Ok("portfolio.notes.supply".into()));
+
+        assert_eq!(finalized.text, "Check portfolio. Notes. Supply tomorrow");
+        assert!(!finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
+    fn structured_literal_embedded_sentence_accepts_full_sentence_rewrite() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let mut plan = rewrite_plan();
+        plan.fallback_text = "Check portfolio. Notes. Supply tomorrow".into();
+        plan.rewrite_transcript.rewrite_candidates = vec![RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        }];
+
+        let finalized = finalize_rewrite_attempt(
+            &config,
+            plan,
+            Ok("Check portfolio.notes.supply tomorrow.".into()),
+        );
+
+        assert_eq!(finalized.text, "Check portfolio.notes.supply tomorrow.");
+        assert!(finalized.rewrite_summary.rewrite_used);
     }
 }

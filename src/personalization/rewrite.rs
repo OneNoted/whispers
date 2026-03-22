@@ -6,6 +6,7 @@ use crate::rewrite_protocol::{
     RewriteIntentConfidence, RewritePolicyContext, RewriteReplacementScope, RewriteTailShape,
     RewriteTranscript, RewriteTranscriptSegment,
 };
+use crate::structured_text;
 use crate::transcribe::Transcript;
 
 use super::{PersonalizationRules, WordSpan, apply_dictionary, collect_word_spans};
@@ -170,6 +171,12 @@ fn build_rewrite_candidates(
         raw_text,
         rules,
     );
+    push_structured_literal_candidate(
+        &mut candidates,
+        raw_text,
+        correction_aware_text,
+        aggressive_correction_text,
+    );
     push_rewrite_candidate(
         &mut candidates,
         RewriteCandidateKind::ConservativeCorrection,
@@ -326,6 +333,34 @@ fn build_rewrite_candidates(
 
     candidates.truncate(5);
     candidates
+}
+
+fn push_structured_literal_candidate(
+    candidates: &mut Vec<RewriteCandidate>,
+    raw_text: &str,
+    correction_aware_text: &str,
+    aggressive_correction_text: Option<&str>,
+) {
+    let structured = structured_text::extract_structured_candidate(raw_text)
+        .or_else(|| structured_text::extract_structured_candidate(correction_aware_text))
+        .or_else(|| {
+            aggressive_correction_text.and_then(structured_text::extract_structured_candidate)
+        });
+    let Some(structured) = structured else {
+        return;
+    };
+
+    if candidates.iter().any(|candidate| {
+        candidate.kind == RewriteCandidateKind::StructuredLiteral
+            && candidate.text == structured.normalized
+    }) {
+        return;
+    }
+
+    candidates.push(RewriteCandidate {
+        kind: RewriteCandidateKind::StructuredLiteral,
+        text: structured.normalized,
+    });
 }
 
 fn push_rewrite_candidate(
@@ -684,15 +719,16 @@ fn candidate_priority(kind: RewriteCandidateKind) -> u8 {
         RewriteCandidateKind::SpanReplacement => 0,
         RewriteCandidateKind::ClauseReplacement => 1,
         RewriteCandidateKind::SentenceReplacement => 2,
-        RewriteCandidateKind::ContextualReplacement => 3,
-        RewriteCandidateKind::AggressiveCorrection => 4,
-        RewriteCandidateKind::CancelPreviousSentence => 5,
-        RewriteCandidateKind::CancelPreviousClause => 6,
-        RewriteCandidateKind::FollowingReplacement => 7,
-        RewriteCandidateKind::GlossaryCorrection => 8,
-        RewriteCandidateKind::ConservativeCorrection => 9,
-        RewriteCandidateKind::DropCueOnly => 10,
-        RewriteCandidateKind::Literal => 11,
+        RewriteCandidateKind::StructuredLiteral => 3,
+        RewriteCandidateKind::ContextualReplacement => 4,
+        RewriteCandidateKind::AggressiveCorrection => 5,
+        RewriteCandidateKind::CancelPreviousSentence => 6,
+        RewriteCandidateKind::CancelPreviousClause => 7,
+        RewriteCandidateKind::FollowingReplacement => 8,
+        RewriteCandidateKind::GlossaryCorrection => 9,
+        RewriteCandidateKind::ConservativeCorrection => 10,
+        RewriteCandidateKind::DropCueOnly => 11,
+        RewriteCandidateKind::Literal => 12,
     }
 }
 
@@ -873,6 +909,61 @@ mod tests {
                 | RewriteCandidateKind::SentenceReplacement
         ) && candidate.text == "hi"));
         assert!(rewrite.recommended_candidate.is_some());
+    }
+
+    #[test]
+    fn build_rewrite_transcript_adds_structured_literal_candidate_for_domains() {
+        let transcript = Transcript {
+            raw_text: "portfolio. Notes. Supply is the URL".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let rewrite = build_rewrite_transcript(&transcript, &rules());
+        assert!(rewrite.rewrite_candidates.iter().any(|candidate| {
+            candidate.kind == RewriteCandidateKind::StructuredLiteral
+                && candidate.text == "portfolio.notes.supply"
+        }));
+    }
+
+    #[test]
+    fn build_rewrite_transcript_keeps_structured_literal_kind_for_exact_literal_text() {
+        let transcript = Transcript {
+            raw_text: "https://Example.com/Repo?x=1#Frag".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let rewrite = build_rewrite_transcript(&transcript, &rules());
+        let kinds = rewrite
+            .rewrite_candidates
+            .iter()
+            .filter(|candidate| candidate.text == "https://Example.com/Repo?x=1#Frag")
+            .map(|candidate| candidate.kind)
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&RewriteCandidateKind::Literal));
+        assert!(kinds.contains(&RewriteCandidateKind::StructuredLiteral));
+    }
+
+    #[test]
+    fn build_rewrite_transcript_preserves_prefixed_structured_literal_text() {
+        let transcript = Transcript {
+            raw_text: "/api/v1".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let rewrite = build_rewrite_transcript(&transcript, &rules());
+        let kinds = rewrite
+            .rewrite_candidates
+            .iter()
+            .filter(|candidate| candidate.text == "/api/v1")
+            .map(|candidate| candidate.kind)
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&RewriteCandidateKind::Literal));
+        assert!(kinds.contains(&RewriteCandidateKind::StructuredLiteral));
     }
 
     #[test]

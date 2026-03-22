@@ -2,6 +2,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::error::{Result, WhsprError};
+use crate::runtime_guards::wait_child_with_timeout;
 
 pub(super) struct ClipboardAdapter<'a> {
     wl_copy_bin: &'a str,
@@ -66,7 +67,7 @@ pub(super) fn run_wl_copy_with_timeout(
         }
         if std::time::Instant::now() >= deadline {
             let _ = wl_copy.kill();
-            let _ = wl_copy.wait();
+            let _ = wait_child_with_timeout(&mut wl_copy, Duration::from_millis(100));
             return Err(WhsprError::Injection(format!(
                 "wl-copy timed out after {}ms",
                 timeout.as_millis()

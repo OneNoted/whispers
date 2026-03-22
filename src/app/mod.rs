@@ -3,19 +3,22 @@ use std::time::Instant;
 use crate::config::Config;
 use crate::error::Result;
 use crate::postprocess::finalize;
+use crate::runtime_diagnostics::DictationRuntimeDiagnostics;
+use crate::runtime_support::PidLock;
 
 mod osd;
 mod runtime;
 
 use runtime::DictationRuntime;
 
-pub async fn run(config: Config) -> Result<()> {
+pub async fn run(config: Config, _pid_lock: PidLock) -> Result<()> {
     let activation_started = Instant::now();
+    let diagnostics = DictationRuntimeDiagnostics::new(&config);
     // Register signals before startup work to minimize early-signal races.
     let mut sigusr1 =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut runtime = DictationRuntime::new(config);
+    let mut runtime = DictationRuntime::new(config, diagnostics.clone());
     let recording = runtime.start_recording()?;
     runtime.prepare_services()?;
 
@@ -41,6 +44,7 @@ pub async fn run(config: Config) -> Result<()> {
     if transcribed.is_empty() {
         tracing::warn!("transcription returned empty text");
         finalize::wait_for_feedback_drain().await;
+        diagnostics.clear_with_stage(crate::runtime_diagnostics::DictationStage::Done);
         return Ok(());
     }
 
@@ -53,10 +57,12 @@ pub async fn run(config: Config) -> Result<()> {
         // causes an audible click as the OS closes our audio file descriptors.
         // With speech, transcription takes seconds — providing natural drain time.
         finalize::wait_for_feedback_drain().await;
+        diagnostics.clear_with_stage(crate::runtime_diagnostics::DictationStage::Done);
         return Ok(());
     }
 
     runtime.inject_finalized(finalized).await?;
+    diagnostics.clear_with_stage(crate::runtime_diagnostics::DictationStage::Done);
 
     tracing::info!("done");
     tracing::info!(

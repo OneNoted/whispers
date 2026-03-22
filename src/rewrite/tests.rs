@@ -182,6 +182,14 @@ fn base_instructions_allow_technical_term_inference() {
 }
 
 #[test]
+fn instructions_cover_structured_text_literals() {
+    let instructions = rewrite_instructions(ResolvedRewriteProfile::LlamaCompat);
+    assert!(instructions.contains("hostname, URL, email address"));
+    assert!(instructions.contains("preserve dots, slashes, colons"));
+    assert!(instructions.contains("do not append explanatory prose"));
+}
+
+#[test]
 fn custom_instructions_append_to_system_prompt() {
     let instructions = build_system_instructions(
         &correction_transcript(),
@@ -238,6 +246,22 @@ fn fast_route_prompt_allows_agentic_technical_normalization() {
     assert!(
         prompt.contains("Available rewrite candidates (advisory, not exhaustive in agentic mode)")
     );
+}
+
+#[test]
+fn fast_route_prompt_mentions_preserving_structured_candidates() {
+    let mut transcript = fast_agentic_transcript();
+    transcript.rewrite_candidates.insert(
+        0,
+        RewriteCandidate {
+            kind: RewriteCandidateKind::StructuredLiteral,
+            text: "portfolio.notes.supply".into(),
+        },
+    );
+
+    let prompt = build_user_message(&transcript);
+    assert!(prompt.contains("structured-text candidate is present"));
+    assert!(prompt.contains("do not rewrite it into prose"));
 }
 
 #[test]

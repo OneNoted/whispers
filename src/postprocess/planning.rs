@@ -6,11 +6,20 @@ use crate::config::{Config, PostprocessMode};
 use crate::context::TypingContext;
 use crate::personalization::{self, PersonalizationRules};
 use crate::rewrite_model;
-use crate::rewrite_protocol::{RewriteSessionBacktrackCandidateKind, RewriteTranscript};
+use crate::rewrite_protocol::{
+    RewriteCandidateKind, RewriteSessionBacktrackCandidateKind, RewriteTranscript,
+};
 use crate::session::{self, EligibleSessionEntry};
+use crate::structured_text;
 use crate::transcribe::Transcript;
 
 use super::finalize::FinalizedOperation;
+
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeTextResources {
+    pub(crate) rules: PersonalizationRules,
+    pub(crate) runtime_policy: agentic_rewrite::RuntimePolicyResources,
+}
 
 pub(crate) struct RewritePlan {
     pub rules: PersonalizationRules,
@@ -35,29 +44,70 @@ pub(crate) fn resolve_rewrite_model_path(config: &Config) -> Option<PathBuf> {
     rewrite_model::selected_model_path(&config.rewrite.selected_model)
 }
 
-pub(crate) fn load_runtime_rules(config: &Config) -> PersonalizationRules {
+pub(crate) fn load_runtime_rules_with_status(config: &Config) -> (PersonalizationRules, bool) {
     match personalization::load_rules(config) {
-        Ok(rules) => rules,
+        Ok(rules) => (rules, false),
         Err(err) => {
             tracing::warn!("failed to load personalization rules: {err}");
-            PersonalizationRules::default()
+            (PersonalizationRules::default(), true)
         }
     }
 }
 
+pub fn load_runtime_text_resources(config: &Config) -> RuntimeTextResources {
+    load_runtime_text_resources_with_status(config).0
+}
+
+pub fn load_runtime_text_resources_with_status(config: &Config) -> (RuntimeTextResources, bool) {
+    let (rules, rules_degraded) = load_runtime_rules_with_status(config);
+    let (runtime_policy, policy_degraded) =
+        agentic_rewrite::load_runtime_resources_with_status(config);
+
+    (
+        RuntimeTextResources {
+            rules,
+            runtime_policy,
+        },
+        rules_degraded || policy_degraded,
+    )
+}
+
 pub(crate) fn build_rewrite_plan(
     config: &Config,
+    resources: &RuntimeTextResources,
     transcript: &Transcript,
     typing_context: Option<&TypingContext>,
     recent_session: Option<&EligibleSessionEntry>,
 ) -> RewritePlan {
-    let rules = load_runtime_rules(config);
+    let rules = resources.rules.clone();
     let local_model_path = resolve_rewrite_model_path(config);
     let mut rewrite_transcript = personalization::build_rewrite_transcript(transcript, &rules);
     rewrite_transcript.typing_context = typing_context.and_then(session::to_rewrite_typing_context);
-    agentic_rewrite::apply_runtime_policy(config, &mut rewrite_transcript);
+    agentic_rewrite::apply_runtime_policy_with_resources(
+        config,
+        &mut rewrite_transcript,
+        &resources.runtime_policy,
+    );
     let session_plan = session::build_backtrack_plan(&rewrite_transcript, recent_session);
     let mut fallback_text = base_text(config, transcript);
+    if let Some(candidate) = rewrite_transcript
+        .rewrite_candidates
+        .iter()
+        .find(|candidate| candidate.kind == RewriteCandidateKind::StructuredLiteral)
+    {
+        let candidate_text = candidate.text.as_str();
+        let prefer_structured_fallback = [
+            Some(transcript.raw_text.as_str()),
+            Some(rewrite_transcript.correction_aware_text.as_str()),
+            rewrite_transcript.aggressive_correction_text.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|text| structured_text::output_matches_candidate(text, candidate_text));
+        if prefer_structured_fallback {
+            fallback_text = candidate.text.clone();
+        }
+    }
     if session_plan.recommended.as_ref().is_some_and(|candidate| {
         matches!(
             candidate.kind,
@@ -145,7 +195,7 @@ fn recommended_operation(rewrite_transcript: &RewriteTranscript) -> FinalizedOpe
 
 #[cfg(test)]
 mod tests {
-    use super::build_rewrite_plan;
+    use super::{build_rewrite_plan, load_runtime_text_resources};
     use crate::config::{Config, PostprocessMode};
     use crate::context::SurfaceKind;
     use crate::postprocess::finalize::FinalizedOperation;
@@ -181,7 +231,13 @@ mod tests {
             delete_graphemes: 11,
         };
 
-        let plan = build_rewrite_plan(&config, &transcript, None, Some(&recent));
+        let plan = build_rewrite_plan(
+            &config,
+            &load_runtime_text_resources(&config),
+            &transcript,
+            None,
+            Some(&recent),
+        );
         assert_eq!(plan.fallback_text, "Hi");
         assert_eq!(plan.recommended_candidate.as_deref(), Some("Hi"));
         assert_eq!(
@@ -190,6 +246,51 @@ mod tests {
                 entry_id: 7,
                 delete_graphemes: 11,
             }
+        );
+    }
+
+    #[test]
+    fn build_rewrite_plan_prefers_structured_literal_for_fallback() {
+        let mut config = Config::default();
+        config.postprocess.mode = PostprocessMode::Rewrite;
+
+        let transcript = Transcript {
+            raw_text: "portfolio. Notes. Supply is the URL".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let plan = build_rewrite_plan(
+            &config,
+            &load_runtime_text_resources(&config),
+            &transcript,
+            None,
+            None,
+        );
+        assert_eq!(plan.fallback_text, "portfolio.notes.supply");
+    }
+
+    #[test]
+    fn build_rewrite_plan_keeps_full_fallback_when_structured_text_is_embedded() {
+        let mut config = Config::default();
+        config.postprocess.mode = PostprocessMode::Rewrite;
+
+        let transcript = Transcript {
+            raw_text: "Check portfolio. Notes. Supply tomorrow".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let plan = build_rewrite_plan(
+            &config,
+            &load_runtime_text_resources(&config),
+            &transcript,
+            None,
+            None,
+        );
+        assert_eq!(
+            plan.fallback_text,
+            "Check portfolio. Notes. Supply tomorrow"
         );
     }
 }

@@ -46,6 +46,14 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
     let transcript =
         asr::execute::transcribe_audio(&config, prepared, samples, file_audio::TARGET_SAMPLE_RATE)
             .await?;
+    let runtime_text_resources = if raw {
+        None
+    } else {
+        Some(load_runtime_text_resources_or_default(
+            &config,
+            "file transcription",
+        ))
+    };
 
     let text = if raw {
         postprocess::planning::raw_text(&transcript)
@@ -54,6 +62,7 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
             &config,
             transcript,
             rewrite_service.as_ref(),
+            runtime_text_resources.as_ref(),
             None,
             None,
         )
@@ -71,8 +80,22 @@ async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: boo
     Ok(())
 }
 
+fn load_runtime_text_resources_or_default(
+    config: &Config,
+    phase: &'static str,
+) -> postprocess::planning::RuntimeTextResources {
+    let (resources, degraded) =
+        postprocess::planning::load_runtime_text_resources_with_status(config);
+    if degraded {
+        tracing::warn!(
+            "runtime text resources for {phase} were degraded; using available defaults"
+        );
+    }
+    resources
+}
+
 async fn run_default(cli: &Cli) -> Result<()> {
-    let Some(_pid_lock) = runtime_support::acquire_or_signal_lock()? else {
+    let Some(pid_lock) = runtime_support::acquire_or_signal_lock()? else {
         return Ok(());
     };
 
@@ -83,7 +106,7 @@ async fn run_default(cli: &Cli) -> Result<()> {
     asr::validation::validate_transcription_config(&config)?;
     tracing::debug!("config loaded: {config:?}");
 
-    app::run(config).await
+    app::run(config, pid_lock).await
 }
 
 #[tokio::main]

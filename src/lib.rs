@@ -26,9 +26,13 @@ pub mod rewrite_model;
 pub mod rewrite_profile;
 pub mod rewrite_protocol;
 pub mod rewrite_worker;
+pub(crate) mod runtime_diagnostics;
+pub(crate) mod runtime_guards;
 pub mod runtime_support;
+pub(crate) mod safe_fs;
 pub mod session;
 pub mod setup;
+pub(crate) mod structured_text;
 #[cfg(test)]
 pub mod test_support;
 pub mod transcribe;

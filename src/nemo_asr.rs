@@ -15,6 +15,7 @@ use tokio::process::Command;
 use crate::asr_protocol::{AsrRequest, AsrResponse};
 use crate::config::{TranscriptionBackend, TranscriptionConfig, data_dir};
 use crate::error::{Result, WhsprError};
+use crate::runtime_guards::{run_command_output_with_timeout, run_command_status_with_timeout};
 use crate::transcribe::Transcript;
 
 const PYTHON_WORKER_SOURCE: &str = include_str!("nemo_asr_worker.py");
@@ -23,6 +24,9 @@ const MODEL_READY_METADATA: &str = ".model-ready.json";
 const STARTUP_LOCK_STALE_AGE: Duration = Duration::from_secs(600);
 const STARTUP_READY_TIMEOUT: Duration = Duration::from_secs(240);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const RUNTIME_SETUP_TIMEOUT: Duration = Duration::from_secs(1_800);
+const MODEL_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(7_200);
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,7 +135,8 @@ pub async fn download_managed_model(name: &str) -> Result<()> {
             "Preparing experimental NeMo runtime and model {}...",
             model.name
         ));
-        let status = std::process::Command::new(&python)
+        let mut command = std::process::Command::new(&python);
+        command
             .arg(&script)
             .arg("download")
             .arg("--model-ref")
@@ -143,8 +148,8 @@ pub async fn download_managed_model(name: &str) -> Result<()> {
             .arg("--cache-dir")
             .arg(nemo_cache_dir())
             .stdout(crate::ui::child_stdio())
-            .stderr(crate::ui::child_stdio())
-            .status()
+            .stderr(crate::ui::child_stdio());
+        let status = run_command_status_with_timeout(&mut command, MODEL_DOWNLOAD_TIMEOUT)
             .map_err(|e| {
                 WhsprError::Download(format!(
                     "failed to start NeMo downloader via {}: {e}",
@@ -347,23 +352,31 @@ impl NemoAsrService {
     }
 
     pub async fn transcribe(&self, audio: &[f32], sample_rate: u32) -> Result<Transcript> {
-        self.ensure_running(STARTUP_READY_TIMEOUT).await?;
+        self.transcribe_with_timeout(audio, sample_rate, REQUEST_TIMEOUT)
+            .await
+    }
 
-        let mut stream =
-            tokio::time::timeout(REQUEST_TIMEOUT, UnixStream::connect(&self.socket_path))
-                .await
-                .map_err(|_| {
-                    WhsprError::Transcription(format!(
-                        "NeMo ASR worker timed out after {}ms",
-                        REQUEST_TIMEOUT.as_millis()
-                    ))
-                })?
-                .map_err(|e| {
-                    WhsprError::Transcription(format!(
-                        "failed to connect to NeMo ASR worker at {}: {e}",
-                        self.socket_path.display()
-                    ))
-                })?;
+    async fn transcribe_with_timeout(
+        &self,
+        audio: &[f32],
+        sample_rate: u32,
+        timeout: Duration,
+    ) -> Result<Transcript> {
+        self.ensure_running(STARTUP_READY_TIMEOUT).await?;
+        let deadline = tokio::time::Instant::now() + timeout;
+
+        let mut stream = tokio::time::timeout(
+            remaining_request_budget(deadline, timeout)?,
+            UnixStream::connect(&self.socket_path),
+        )
+        .await
+        .map_err(|_| asr_timeout_error(timeout))?
+        .map_err(|e| {
+            WhsprError::Transcription(format!(
+                "failed to connect to NeMo ASR worker at {}: {e}",
+                self.socket_path.display()
+            ))
+        })?;
 
         let mut audio_bytes = Vec::with_capacity(std::mem::size_of_val(audio));
         for sample in audio {
@@ -375,26 +388,27 @@ impl NemoAsrService {
         })
         .map_err(|e| WhsprError::Transcription(format!("failed to encode ASR request: {e}")))?;
         payload.push(b'\n');
-        stream
-            .write_all(&payload)
+        tokio::time::timeout(
+            remaining_request_budget(deadline, timeout)?,
+            stream.write_all(&payload),
+        )
+        .await
+        .map_err(|_| asr_timeout_error(timeout))?
+        .map_err(|e| WhsprError::Transcription(format!("failed to send ASR request: {e}")))?;
+        tokio::time::timeout(remaining_request_budget(deadline, timeout)?, stream.flush())
             .await
-            .map_err(|e| WhsprError::Transcription(format!("failed to send ASR request: {e}")))?;
-        stream
-            .flush()
-            .await
+            .map_err(|_| asr_timeout_error(timeout))?
             .map_err(|e| WhsprError::Transcription(format!("failed to flush ASR request: {e}")))?;
 
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
-        tokio::time::timeout(REQUEST_TIMEOUT, reader.read_line(&mut line))
-            .await
-            .map_err(|_| {
-                WhsprError::Transcription(format!(
-                    "NeMo ASR worker timed out after {}ms",
-                    REQUEST_TIMEOUT.as_millis()
-                ))
-            })?
-            .map_err(|e| WhsprError::Transcription(format!("failed to read ASR response: {e}")))?;
+        tokio::time::timeout(
+            remaining_request_budget(deadline, timeout)?,
+            reader.read_line(&mut line),
+        )
+        .await
+        .map_err(|_| asr_timeout_error(timeout))?
+        .map_err(|e| WhsprError::Transcription(format!("failed to read ASR response: {e}")))?;
 
         if line.trim().is_empty() {
             return Err(WhsprError::Transcription(
@@ -409,6 +423,19 @@ impl NemoAsrService {
             AsrResponse::Error { message } => Err(WhsprError::Transcription(message)),
         }
     }
+}
+
+fn remaining_request_budget(deadline: tokio::time::Instant, timeout: Duration) -> Result<Duration> {
+    deadline
+        .checked_duration_since(tokio::time::Instant::now())
+        .ok_or_else(|| asr_timeout_error(timeout))
+}
+
+fn asr_timeout_error(timeout: Duration) -> WhsprError {
+    WhsprError::Transcription(format!(
+        "NeMo ASR worker timed out after {}ms",
+        timeout.as_millis()
+    ))
 }
 
 fn find_managed_model(name: &str) -> Option<&'static ManagedModelInfo> {
@@ -522,11 +549,9 @@ fn ensure_runtime_sync(family: NemoModelFamily) -> Result<()> {
 
     let python3 = system_python()?;
     let venv_dir = runtime_dir;
-    let status = std::process::Command::new(&python3)
-        .arg("-m")
-        .arg("venv")
-        .arg(&venv_dir)
-        .status()
+    let mut create_venv = std::process::Command::new(&python3);
+    create_venv.arg("-m").arg("venv").arg(&venv_dir);
+    let status = run_command_status_with_timeout(&mut create_venv, RUNTIME_SETUP_TIMEOUT)
         .map_err(|e| WhsprError::Transcription(format!("failed to create NeMo venv: {e}")))?;
     if !status.success() {
         return Err(WhsprError::Transcription(format!(
@@ -535,13 +560,14 @@ fn ensure_runtime_sync(family: NemoModelFamily) -> Result<()> {
     }
 
     let pip = venv_dir.join("bin").join("pip");
-    let status = std::process::Command::new(&pip)
+    let mut bootstrap_pip = std::process::Command::new(&pip);
+    bootstrap_pip
         .arg("install")
         .arg("--upgrade")
         .arg("pip")
         .arg("setuptools")
-        .arg("wheel")
-        .status()
+        .arg("wheel");
+    let status = run_command_status_with_timeout(&mut bootstrap_pip, RUNTIME_SETUP_TIMEOUT)
         .map_err(|e| WhsprError::Transcription(format!("failed to bootstrap pip: {e}")))?;
     if !status.success() {
         return Err(WhsprError::Transcription(format!(
@@ -581,11 +607,11 @@ fn system_python() -> Result<PathBuf> {
 }
 
 fn python_version<S: AsRef<OsStr>>(python: S) -> Option<(u32, u32)> {
-    let output = std::process::Command::new(python)
+    let mut command = std::process::Command::new(python);
+    command
         .arg("-c")
-        .arg("import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        .output()
-        .ok()?;
+        .arg("import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')");
+    let output = run_command_output_with_timeout(&mut command, VERSION_PROBE_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -626,9 +652,9 @@ fn install_runtime_packages(pip: &Path, profile: NemoRuntimeProfile) -> Result<(
 }
 
 fn run_pip_install(pip: &Path, args: &[&str], label: &str) -> Result<()> {
-    let status = std::process::Command::new(pip)
-        .args(args)
-        .status()
+    let mut command = std::process::Command::new(pip);
+    command.args(args);
+    let status = run_command_status_with_timeout(&mut command, RUNTIME_SETUP_TIMEOUT)
         .map_err(|e| WhsprError::Transcription(format!("failed to install {label}: {e}")))?;
     if !status.success() {
         return Err(WhsprError::Transcription(format!(
@@ -742,6 +768,7 @@ impl Drop for StartupLock {
 mod tests {
     use super::*;
     use crate::config::TranscriptionConfig;
+    use crate::test_support::unique_temp_dir;
     use std::sync::{Mutex, OnceLock};
 
     fn test_dir_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -814,5 +841,49 @@ mod tests {
     fn prepare_service_requires_nemo_backend() {
         let config = TranscriptionConfig::default();
         assert!(prepare_service(&config).is_none());
+    }
+
+    #[tokio::test]
+    async fn transcribe_times_out_when_request_write_stalls() {
+        let runtime_dir = unique_temp_dir("nemo-request-timeout");
+        let socket_path = runtime_dir.join("asr.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("bind stalled socket");
+
+        let server = tokio::spawn(async move {
+            let (probe, _) = listener.accept().await.expect("accept readiness probe");
+            drop(probe);
+            let (_stalled_request, _) = listener.accept().await.expect("accept ASR request");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+
+        let service = NemoAsrService {
+            socket_path: socket_path.clone(),
+            lock_path: runtime_dir.join("asr.lock"),
+            model_ref: "test-model".into(),
+            family: NemoModelFamily::Parakeet,
+            language: "en".into(),
+            use_gpu: false,
+            idle_timeout_ms: 0,
+        };
+
+        let err = service
+            .transcribe_with_timeout(
+                &oversized_audio(512 * 1024),
+                16_000,
+                Duration::from_millis(50),
+            )
+            .await
+            .expect_err("stalled ASR request should time out");
+        let message = match err {
+            WhsprError::Transcription(message) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(message.contains("NeMo ASR worker timed out"));
+
+        server.abort();
+    }
+
+    fn oversized_audio(samples: usize) -> Vec<f32> {
+        vec![0.0; samples]
     }
 }

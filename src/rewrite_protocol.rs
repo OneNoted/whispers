@@ -192,6 +192,7 @@ pub enum RewriteCorrectionPolicy {
 #[serde(rename_all = "snake_case")]
 pub enum RewriteCandidateKind {
     Literal,
+    StructuredLiteral,
     ConservativeCorrection,
     AggressiveCorrection,
     GlossaryCorrection,

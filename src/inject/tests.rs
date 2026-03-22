@@ -33,8 +33,8 @@ fn run_wl_copy_reports_non_zero_exit() {
 #[test]
 fn run_wl_copy_reports_timeout() {
     let err = clipboard::run_wl_copy_with_timeout(
-        "/bin/sh",
-        &[String::from("-c"), String::from("sleep 1")],
+        "/bin/sleep",
+        &[String::from("1")],
         "hello",
         std::time::Duration::from_millis(80),
     )

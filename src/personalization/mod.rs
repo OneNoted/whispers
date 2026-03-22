@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::error::Result;
+use crate::structured_text;
 
 mod rewrite;
 mod store;
@@ -59,6 +60,9 @@ pub fn load_rules(config: &Config) -> Result<PersonalizationRules> {
 pub fn finalize_text(text: &str, rules: &PersonalizationRules) -> String {
     let corrected = apply_dictionary(text, rules);
     let expanded = expand_snippets(&corrected, rules);
+    if let Some(normalized) = structured_text::normalize_strict_structured_text(&expanded) {
+        return normalized;
+    }
     normalize_numeric_dot_runs(&expanded)
 }
 
@@ -446,6 +450,12 @@ mod tests {
     fn finalize_text_collapses_spaced_numeric_dot_runs() {
         let finalized = finalize_text("MPL 2. 0 and TLS 1 . 3 are common references", &rules());
         assert_eq!(finalized, "MPL 2.0 and TLS 1.3 are common references");
+    }
+
+    #[test]
+    fn finalize_text_collapses_spaced_structured_punctuation_runs() {
+        let finalized = finalize_text("portfolio . notes . supply", &rules());
+        assert_eq!(finalized, "portfolio.notes.supply");
     }
 
     #[test]
