@@ -5,7 +5,11 @@ pub(crate) struct StructuredCandidate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Token {
-    Word(String),
+    Word {
+        text: String,
+        normalized: String,
+        joined_to_prev: bool,
+    },
     Sep { ch: char, spoken: bool },
 }
 
@@ -81,7 +85,7 @@ fn meta_wrapped_candidate_matches(text: &str, candidate: &str) -> bool {
 fn non_candidate_tokens_are_meta(tokens: &[Token]) -> bool {
     tokens.iter().all(|token| match token {
         Token::Sep { .. } => true,
-        Token::Word(word) => is_meta_word(word),
+        Token::Word { normalized, .. } => is_meta_word(normalized),
     })
 }
 
@@ -122,10 +126,7 @@ fn tokenize(text: &str) -> Vec<Token> {
 }
 
 fn raw_tokens(text: &str) -> Vec<Token> {
-    let chars = text
-        .chars()
-        .flat_map(|ch| ch.to_lowercase())
-        .collect::<Vec<_>>();
+    let chars = text.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
     let mut index = 0usize;
 
@@ -137,7 +138,13 @@ fn raw_tokens(text: &str) -> Vec<Token> {
             while index < chars.len() && chars[index].is_ascii_alphanumeric() {
                 index += 1;
             }
-            tokens.push(Token::Word(chars[start..index].iter().collect()));
+            let text = chars[start..index].iter().collect::<String>();
+            let normalized = text.chars().flat_map(|ch| ch.to_lowercase()).collect();
+            tokens.push(Token::Word {
+                text,
+                normalized,
+                joined_to_prev: start > 0 && !chars[start - 1].is_whitespace(),
+            });
             continue;
         }
 
@@ -185,8 +192,8 @@ fn fold_spoken_separator_tokens(tokens: Vec<Token>) -> Vec<Token> {
         }
 
         match tokens.get(index) {
-            Some(Token::Word(word)) => {
-                let separator = match word.as_str() {
+            Some(Token::Word { normalized, .. }) => {
+                let separator = match normalized.as_str() {
                     "dot" => Some('.'),
                     "period" => Some('.'),
                     "slash" => Some('/'),
@@ -219,11 +226,19 @@ fn matches_word_slice(tokens: &[Token], index: usize, words: &[&str]) -> bool {
     tokens[index..index + words.len()]
         .iter()
         .zip(words)
-        .all(|(token, expected)| matches!(token, Token::Word(word) if word == expected))
+        .all(|(token, expected)| {
+            matches!(
+                token,
+                Token::Word { normalized, .. } if normalized == expected
+            )
+        })
 }
 
 fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
-    let Token::Word(first_word) = tokens.get(start)? else {
+    let Token::Word {
+        text: first_word, ..
+    } = tokens.get(start)?
+    else {
         return None;
     };
 
@@ -250,7 +265,12 @@ fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
             break;
         }
 
-        let Some(Token::Word(word)) = tokens.get(index) else {
+        let Some(Token::Word {
+            text: word,
+            normalized: normalized_word,
+            joined_to_prev,
+        }) = tokens.get(index)
+        else {
             if preserve_terminal_separator_cluster(&cluster) {
                 if cluster.contains('.') {
                     dot_clusters += 1;
@@ -270,7 +290,11 @@ fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
         has_non_dot_cluster |= cluster.chars().any(|ch| ch != '.');
         has_spoken_separator |= cluster_has_spoken;
         normalized.push_str(&cluster);
-        normalized.push_str(word);
+        normalized.push_str(if *joined_to_prev && !cluster_has_spoken {
+            word
+        } else {
+            normalized_word
+        });
         word_count += 1;
         index += 1;
     }
@@ -346,10 +370,11 @@ fn hostname_label_is_valid(label: &str) -> bool {
 }
 
 fn likely_hostname_tld(tld: &str) -> bool {
+    let tld_lower = tld.to_ascii_lowercase();
     hostname_label_is_valid(tld)
         && ((tld.len() == 2 && tld.chars().all(|ch| ch.is_ascii_alphabetic()))
             || matches!(
-                tld,
+                tld_lower.as_str(),
                 "com"
                     | "net"
                     | "org"
@@ -419,6 +444,21 @@ mod tests {
         assert_eq!(
             candidate.normalized,
             "https://example.com/?q=test&lang=en#frag"
+        );
+    }
+
+    #[test]
+    fn preserves_case_for_literal_structured_text() {
+        let candidate =
+            extract_structured_candidate("Open https://Example.com/Path/Repo?Query=Value#Frag now")
+                .expect("structured candidate");
+        assert_eq!(
+            candidate.normalized,
+            "https://Example.com/Path/Repo?Query=Value#Frag"
+        );
+        assert_eq!(
+            normalize_strict_structured_text("MixedCase@Example.com"),
+            Some("MixedCase@Example.com".into())
         );
     }
 

@@ -1,16 +1,27 @@
 use std::io::{self, Read};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const KILL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
+const DETACHED_WORKER_COUNT: usize = 4;
+const DETACHED_QUEUE_CAPACITY: usize = DETACHED_WORKER_COUNT * 4;
+
+type DetachedJob = Box<dyn FnOnce() + Send + 'static>;
+
+struct DetachedTaskPool {
+    sender: mpsc::SyncSender<DetachedJob>,
+}
+
+static DETACHED_TASK_POOL: OnceLock<Result<DetachedTaskPool, String>> = OnceLock::new();
 
 #[derive(Debug)]
 pub(crate) enum TimedTaskError {
     Spawn(io::Error),
+    Busy,
     Timeout(Duration),
     Panic,
     ChannelClosed,
@@ -19,19 +30,66 @@ pub(crate) enum TimedTaskError {
 impl TimedTaskError {
     pub(crate) fn describe(&self, phase: &str) -> String {
         match self {
-            Self::Spawn(err) => format!("failed to spawn {phase} thread: {err}"),
-            Self::Timeout(timeout) => {
-                format!("{phase} timed out after {}ms", timeout.as_millis())
-            }
-            Self::Panic => format!("{phase} thread panicked"),
-            Self::ChannelClosed => format!("{phase} thread exited without a result"),
+            Self::Spawn(err) => format!("failed to start {phase} worker: {err}"),
+            Self::Busy => format!("{phase} worker pool is saturated"),
+            Self::Timeout(timeout) => format!("{phase} timed out after {}ms", timeout.as_millis()),
+            Self::Panic => format!("{phase} worker panicked"),
+            Self::ChannelClosed => format!("{phase} worker exited without a result"),
         }
+    }
+}
+
+impl DetachedTaskPool {
+    fn submit(&self, job: DetachedJob) -> Result<(), TimedTaskError> {
+        self.sender.try_send(job).map_err(|err| match err {
+            mpsc::TrySendError::Full(_) => TimedTaskError::Busy,
+            mpsc::TrySendError::Disconnected(_) => TimedTaskError::ChannelClosed,
+        })
+    }
+}
+
+fn detached_task_pool() -> Result<&'static DetachedTaskPool, TimedTaskError> {
+    match DETACHED_TASK_POOL
+        .get_or_init(|| init_detached_task_pool().map_err(|err| err.to_string()))
+    {
+        Ok(pool) => Ok(pool),
+        Err(message) => Err(TimedTaskError::Spawn(io::Error::other(message.clone()))),
+    }
+}
+
+fn init_detached_task_pool() -> io::Result<DetachedTaskPool> {
+    let (sender, receiver) = mpsc::sync_channel::<DetachedJob>(DETACHED_QUEUE_CAPACITY);
+    let receiver = Arc::new(Mutex::new(receiver));
+
+    for index in 0..DETACHED_WORKER_COUNT {
+        let receiver = Arc::clone(&receiver);
+        thread::Builder::new()
+            .name(format!("whispers-detached-{index}"))
+            .spawn(move || detached_worker_loop(receiver))?;
+    }
+
+    Ok(DetachedTaskPool { sender })
+}
+
+fn detached_worker_loop(receiver: Arc<Mutex<mpsc::Receiver<DetachedJob>>>) {
+    loop {
+        let job = {
+            let receiver = match receiver.lock() {
+                Ok(receiver) => receiver,
+                Err(_) => return,
+            };
+            match receiver.recv() {
+                Ok(job) => job,
+                Err(_) => return,
+            }
+        };
+        job();
     }
 }
 
 pub(crate) fn run_detached_with_timeout<T, F>(
     timeout: Duration,
-    phase: &'static str,
+    _phase: &'static str,
     task: F,
 ) -> Result<T, TimedTaskError>
 where
@@ -39,13 +97,11 @@ where
     F: FnOnce() -> T + Send + 'static,
 {
     let (tx, rx) = mpsc::sync_channel(1);
-    thread::Builder::new()
-        .name(format!("whispers-{}", phase.replace(' ', "-")))
-        .spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(task)).map_err(|_| TimedTaskError::Panic);
-            let _ = tx.send(result);
-        })
-        .map_err(TimedTaskError::Spawn)?;
+    let job = Box::new(move || {
+        let result = catch_unwind(AssertUnwindSafe(task)).map_err(|_| TimedTaskError::Panic);
+        let _ = tx.send(result);
+    });
+    detached_task_pool()?.submit(job)?;
 
     match rx.recv_timeout(timeout) {
         Ok(Ok(value)) => Ok(value),
@@ -57,7 +113,7 @@ where
 
 pub(crate) async fn run_detached_with_timeout_async<T, F>(
     timeout: Duration,
-    phase: &'static str,
+    _phase: &'static str,
     task: F,
 ) -> Result<T, TimedTaskError>
 where
@@ -65,13 +121,11 @@ where
     F: FnOnce() -> T + Send + 'static,
 {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    thread::Builder::new()
-        .name(format!("whispers-{}", phase.replace(' ', "-")))
-        .spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(task)).map_err(|_| TimedTaskError::Panic);
-            let _ = tx.send(result);
-        })
-        .map_err(TimedTaskError::Spawn)?;
+    let job = Box::new(move || {
+        let result = catch_unwind(AssertUnwindSafe(task)).map_err(|_| TimedTaskError::Panic);
+        let _ = tx.send(result);
+    });
+    detached_task_pool()?.submit(job)?;
 
     match tokio::time::timeout(timeout, rx).await {
         Ok(Ok(Ok(value))) => Ok(value),
