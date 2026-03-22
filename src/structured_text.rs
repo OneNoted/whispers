@@ -9,6 +9,7 @@ enum Token {
         text: String,
         normalized: String,
         joined_to_prev: bool,
+        joined_to_next: bool,
     },
     Sep {
         ch: char,
@@ -87,9 +88,13 @@ fn meta_wrapped_candidate_matches(text: &str, candidate: &str) -> bool {
 
 fn non_candidate_tokens_are_meta(tokens: &[Token]) -> bool {
     tokens.iter().all(|token| match token {
-        Token::Sep { .. } => true,
+        Token::Sep { ch, .. } => separator_is_meta_wrapper(*ch),
         Token::Word { normalized, .. } => is_meta_word(normalized),
     })
+}
+
+fn separator_is_meta_wrapper(ch: char) -> bool {
+    matches!(ch, '.' | ':')
 }
 
 fn is_meta_word(word: &str) -> bool {
@@ -147,6 +152,7 @@ fn raw_tokens(text: &str) -> Vec<Token> {
                 text,
                 normalized,
                 joined_to_prev: start > 0 && !chars[start - 1].is_whitespace(),
+                joined_to_next: index < chars.len() && !chars[index].is_whitespace(),
             });
             continue;
         }
@@ -238,19 +244,52 @@ fn matches_word_slice(tokens: &[Token], index: usize, words: &[&str]) -> bool {
 }
 
 fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
-    let Token::Word {
-        text: first_word, ..
-    } = tokens.get(start)?
-    else {
-        return None;
-    };
-
-    let mut normalized = first_word.clone();
-    let mut index = start + 1;
-    let mut word_count = 1usize;
+    let mut index = start;
+    let mut normalized = String::new();
+    let mut word_count = 0usize;
     let mut dot_clusters = 0usize;
     let mut has_non_dot_cluster = false;
     let mut has_spoken_separator = false;
+
+    if let Some(Token::Sep { .. }) = tokens.get(index) {
+        let cluster_start = index;
+        let mut cluster = String::new();
+        let mut cluster_has_spoken = false;
+
+        while let Some(Token::Sep { ch, spoken }) = tokens.get(index) {
+            cluster.push(*ch);
+            cluster_has_spoken |= *spoken;
+            index += 1;
+        }
+
+        if cluster.is_empty() || !allowed_leading_separator_cluster(&cluster) {
+            return None;
+        }
+
+        if cluster.contains('.') {
+            dot_clusters += 1;
+        }
+        has_non_dot_cluster |= cluster.chars().any(|ch| ch != '.');
+        has_spoken_separator |= cluster_has_spoken;
+        normalized.push_str(&cluster);
+
+        if index == cluster_start {
+            return None;
+        }
+    }
+
+    let Token::Word {
+        text: first_word,
+        joined_to_next,
+        ..
+    } = tokens.get(index)?
+    else {
+        return None;
+    };
+    let mut previous_word_joined_to_next = *joined_to_next;
+    normalized.push_str(first_word);
+    word_count += 1;
+    index += 1;
 
     loop {
         let cluster_start = index;
@@ -272,6 +311,7 @@ fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
             text: word,
             normalized: normalized_word,
             joined_to_prev,
+            joined_to_next,
         }) = tokens.get(index)
         else {
             if preserve_terminal_separator_cluster(&cluster) {
@@ -287,6 +327,18 @@ fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
             break;
         };
 
+        if !cluster_has_spoken {
+            if !previous_word_joined_to_next && !separator_cluster_tolerates_leading_space(&cluster)
+            {
+                index = cluster_start;
+                break;
+            }
+            if !*joined_to_prev && !separator_cluster_tolerates_trailing_space(&cluster) {
+                index = cluster_start;
+                break;
+            }
+        }
+
         if cluster.contains('.') {
             dot_clusters += 1;
         }
@@ -298,6 +350,7 @@ fn parse_candidate(tokens: &[Token], start: usize) -> Option<ParsedCandidate> {
         } else {
             normalized_word
         });
+        previous_word_joined_to_next = *joined_to_next;
         word_count += 1;
         index += 1;
     }
@@ -330,6 +383,21 @@ fn allowed_separator_cluster(cluster: &str) -> bool {
             | "/?"
             | "/#"
     )
+}
+
+fn allowed_leading_separator_cluster(cluster: &str) -> bool {
+    matches!(
+        cluster,
+        "/" | "//" | "./" | "../" | "." | "/." | "@" | "#" | "?"
+    )
+}
+
+fn separator_cluster_tolerates_leading_space(cluster: &str) -> bool {
+    cluster == "."
+}
+
+fn separator_cluster_tolerates_trailing_space(cluster: &str) -> bool {
+    cluster == "."
 }
 
 fn preserve_terminal_separator_cluster(cluster: &str) -> bool {
@@ -490,6 +558,51 @@ mod tests {
     }
 
     #[test]
+    fn preserves_required_leading_separators() {
+        assert_eq!(
+            extract_structured_candidate("Use /api/v1 now")
+                .expect("structured candidate")
+                .normalized,
+            "/api/v1"
+        );
+        assert_eq!(
+            extract_structured_candidate("Use @scope/package now")
+                .expect("structured candidate")
+                .normalized,
+            "@scope/package"
+        );
+        assert_eq!(
+            normalize_strict_structured_text("/api/v1"),
+            Some("/api/v1".into())
+        );
+        assert_eq!(
+            normalize_strict_structured_text("@scope/package"),
+            Some("@scope/package".into())
+        );
+        assert_eq!(
+            normalize_strict_structured_text("./api/v1"),
+            Some("./api/v1".into())
+        );
+        assert_eq!(
+            normalize_strict_structured_text("/.well-known/acme"),
+            Some("/.well-known/acme".into())
+        );
+    }
+
+    #[test]
+    fn preserves_prefixed_literals_without_absorbing_preceding_words() {
+        let candidate =
+            extract_structured_candidate("call it @scope/package").expect("structured candidate");
+        assert_eq!(candidate.normalized, "@scope/package");
+        let candidate =
+            extract_structured_candidate("path is /api/v1").expect("structured candidate");
+        assert_eq!(candidate.normalized, "/api/v1");
+        let candidate =
+            extract_structured_candidate("URL: example.com").expect("structured candidate");
+        assert_eq!(candidate.normalized, "example.com");
+    }
+
+    #[test]
     fn avoids_false_positive_for_normal_sentence() {
         assert_eq!(extract_structured_candidate("Section 2. Next step"), None);
         assert_eq!(extract_structured_candidate("Check two.next steps"), None);
@@ -513,10 +626,14 @@ mod tests {
             "https://example.com/",
             "https://example.com/"
         ));
+        assert!(output_matches_candidate("URL: /api/v1", "/api/v1"));
         assert!(!output_matches_candidate(
             "https://example.com/",
             "https://example.com"
         ));
+        assert!(!output_matches_candidate("/api/v1", "api/v1"));
+        assert!(!output_matches_candidate("@scope/package", "scope/package"));
+        assert!(!output_matches_candidate("api/v1?", "api/v1"));
         assert!(!output_matches_candidate(
             "check portfolio. Notes. Supply tomorrow",
             "portfolio.notes.supply"

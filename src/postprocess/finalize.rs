@@ -618,6 +618,28 @@ mod tests {
     }
 
     #[test]
+    fn prefixed_structured_literal_still_canonicalizes_meta_wrapped_rewrite_output() {
+        let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
+        let transcript = Transcript {
+            raw_text: "/api/v1".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+        let plan = planning::build_rewrite_plan(
+            &config,
+            &planning::load_runtime_text_resources(&config),
+            &transcript,
+            None,
+            None,
+        );
+
+        let finalized = finalize_rewrite_attempt(&config, plan, Ok("URL: /api/v1".into()));
+
+        assert_eq!(finalized.text, "/api/v1");
+        assert!(finalized.rewrite_summary.rewrite_used);
+    }
+
+    #[test]
     fn structured_literal_output_is_canonicalized_when_accepted() {
         let config = plan_config(PostprocessMode::Rewrite, RewriteBackend::Cloud);
         let mut plan = rewrite_plan();

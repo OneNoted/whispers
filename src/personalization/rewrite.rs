@@ -947,6 +947,26 @@ mod tests {
     }
 
     #[test]
+    fn build_rewrite_transcript_preserves_prefixed_structured_literal_text() {
+        let transcript = Transcript {
+            raw_text: "/api/v1".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let rewrite = build_rewrite_transcript(&transcript, &rules());
+        let kinds = rewrite
+            .rewrite_candidates
+            .iter()
+            .filter(|candidate| candidate.text == "/api/v1")
+            .map(|candidate| candidate.kind)
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&RewriteCandidateKind::Literal));
+        assert!(kinds.contains(&RewriteCandidateKind::StructuredLiteral));
+    }
+
+    #[test]
     fn contextual_replacement_can_preserve_unlike_prefix() {
         let transcript = Transcript {
             raw_text:
