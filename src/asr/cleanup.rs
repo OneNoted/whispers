@@ -134,39 +134,59 @@ fn asr_runtime_scope_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{EnvVarGuard, env_lock, set_env, unique_temp_dir};
+
+    fn with_runtime_dir<T>(f: impl FnOnce(PathBuf) -> T) -> T {
+        let _env_lock = env_lock();
+        let _guard = EnvVarGuard::capture(&["XDG_RUNTIME_DIR"]);
+        let runtime_dir = unique_temp_dir("asr-cleanup-runtime");
+        set_env(
+            "XDG_RUNTIME_DIR",
+            runtime_dir
+                .to_str()
+                .expect("runtime dir should be valid UTF-8"),
+        );
+        f(runtime_dir.join("whispers"))
+    }
 
     #[test]
     fn parse_faster_worker_cmdline_extracts_socket_path() {
-        let socket = asr_runtime_scope_dir().join("asr-faster-123.sock");
-        let cmdline = format!(
-            "/home/user/.local/share/whispers/faster-whisper/venv/bin/python\0/home/user/.local/share/whispers/faster-whisper/faster_whisper_worker.py\0serve\0--socket-path\0{}\0--model-dir\0/tmp/model\0",
-            socket.display()
-        );
-        let parsed = parse_asr_worker_cmdline(cmdline.as_bytes()).expect("parse worker");
-        assert_eq!(parsed.0, "faster_whisper");
-        assert_eq!(parsed.1, socket);
+        with_runtime_dir(|runtime_scope| {
+            let socket = runtime_scope.join("asr-faster-123.sock");
+            let cmdline = format!(
+                "/home/user/.local/share/whispers/faster-whisper/venv/bin/python\0/home/user/.local/share/whispers/faster-whisper/faster_whisper_worker.py\0serve\0--socket-path\0{}\0--model-dir\0/tmp/model\0",
+                socket.display()
+            );
+            let parsed = parse_asr_worker_cmdline(cmdline.as_bytes()).expect("parse worker");
+            assert_eq!(parsed.0, "faster_whisper");
+            assert_eq!(parsed.1, socket);
+        });
     }
 
     #[test]
     fn parse_nemo_worker_cmdline_extracts_socket_path() {
-        let socket = asr_runtime_scope_dir().join("asr-nemo-456.sock");
-        let cmdline = format!(
-            "/home/user/.local/share/whispers/nemo/venv-asr/bin/python\0/home/user/.local/share/whispers/nemo/nemo_asr_worker.py\0serve\0--socket-path\0{}\0--model-ref\0/tmp/model.nemo\0",
-            socket.display()
-        );
-        let parsed = parse_asr_worker_cmdline(cmdline.as_bytes()).expect("parse worker");
-        assert_eq!(parsed.0, "nemo");
-        assert_eq!(parsed.1, socket);
+        with_runtime_dir(|runtime_scope| {
+            let socket = runtime_scope.join("asr-nemo-456.sock");
+            let cmdline = format!(
+                "/home/user/.local/share/whispers/nemo/venv-asr/bin/python\0/home/user/.local/share/whispers/nemo/nemo_asr_worker.py\0serve\0--socket-path\0{}\0--model-ref\0/tmp/model.nemo\0",
+                socket.display()
+            );
+            let parsed = parse_asr_worker_cmdline(cmdline.as_bytes()).expect("parse worker");
+            assert_eq!(parsed.0, "nemo");
+            assert_eq!(parsed.1, socket);
+        });
     }
 
     #[test]
     fn parse_asr_worker_cmdline_ignores_unrelated_processes() {
-        let socket = asr_runtime_scope_dir().join("asr-other.sock");
-        let cmdline = format!(
-            "/usr/bin/python\0/home/user/script.py\0serve\0--socket-path\0{}\0",
-            socket.display()
-        );
-        assert!(parse_asr_worker_cmdline(cmdline.as_bytes()).is_none());
+        with_runtime_dir(|runtime_scope| {
+            let socket = runtime_scope.join("asr-other.sock");
+            let cmdline = format!(
+                "/usr/bin/python\0/home/user/script.py\0serve\0--socket-path\0{}\0",
+                socket.display()
+            );
+            assert!(parse_asr_worker_cmdline(cmdline.as_bytes()).is_none());
+        });
     }
 
     #[test]
