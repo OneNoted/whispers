@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const KILL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
 const DETACHED_WORKER_COUNT: usize = 4;
@@ -155,6 +158,7 @@ pub(crate) fn run_command_output_with_timeout(
     command: &mut Command,
     timeout: Duration,
 ) -> io::Result<Output> {
+    configure_command_for_timeout(command);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -165,7 +169,7 @@ pub(crate) fn run_command_output_with_timeout(
     let status = match wait_child_with_timeout(&mut child, timeout)? {
         Some(status) => status,
         None => {
-            let _ = child.kill();
+            kill_child_with_descendants(&mut child);
             let _ = wait_child_with_timeout(&mut child, KILL_WAIT_TIMEOUT);
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
@@ -189,11 +193,12 @@ pub(crate) fn run_command_status_with_timeout(
     command: &mut Command,
     timeout: Duration,
 ) -> io::Result<ExitStatus> {
+    configure_command_for_timeout(command);
     let mut child = command.spawn()?;
     match wait_child_with_timeout(&mut child, timeout)? {
         Some(status) => Ok(status),
         None => {
-            let _ = child.kill();
+            kill_child_with_descendants(&mut child);
             let _ = wait_child_with_timeout(&mut child, KILL_WAIT_TIMEOUT);
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -216,9 +221,31 @@ where
     })
 }
 
+fn configure_command_for_timeout(command: &mut Command) {
+    #[cfg(unix)]
+    command.process_group(0);
+}
+
+fn kill_child_with_descendants(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // Timed commands are spawned into their own process group so shell
+        // wrappers and background descendants cannot keep inherited pipes open
+        // past the timeout.
+        let _ = unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+        return;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::unique_temp_dir;
 
     #[test]
     fn detached_timeout_returns_result() {
@@ -265,6 +292,34 @@ mod tests {
     }
 
     #[test]
+    fn command_output_timeout_kills_shell_descendants_holding_pipes_open() {
+        let temp_dir = unique_temp_dir("runtime-guards-output-timeout");
+        let pid_path = temp_dir.join("child.pid");
+        let script = format!("sleep 5 & echo $! > '{}' ; wait", pid_path.display());
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]);
+
+        let started = Instant::now();
+        let err = run_command_output_with_timeout(&mut command, Duration::from_millis(20))
+            .expect_err("timeout");
+
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "timeout path should return promptly"
+        );
+        let child_pid = std::fs::read_to_string(&pid_path)
+            .expect("pid file")
+            .trim()
+            .parse::<i32>()
+            .expect("pid should parse");
+        assert!(
+            process_is_gone(child_pid),
+            "timed command descendants should be terminated"
+        );
+    }
+
+    #[test]
     fn command_status_timeout_returns_exit_status() {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "exit 7"]);
@@ -280,5 +335,47 @@ mod tests {
         let err = run_command_status_with_timeout(&mut command, Duration::from_millis(20))
             .expect_err("timeout");
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn command_status_timeout_kills_shell_descendants() {
+        let temp_dir = unique_temp_dir("runtime-guards-status-timeout");
+        let pid_path = temp_dir.join("child.pid");
+        let script = format!("sleep 5 & echo $! > '{}' ; wait", pid_path.display());
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]);
+
+        let err = run_command_status_with_timeout(&mut command, Duration::from_millis(20))
+            .expect_err("timeout");
+
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        let child_pid = std::fs::read_to_string(&pid_path)
+            .expect("pid file")
+            .trim()
+            .parse::<i32>()
+            .expect("pid should parse");
+        assert!(
+            process_is_gone(child_pid),
+            "timed command descendants should be terminated"
+        );
+    }
+
+    fn process_is_gone(pid: i32) -> bool {
+        #[cfg(unix)]
+        {
+            let result = unsafe { libc::kill(pid, 0) };
+            if result == 0 {
+                return false;
+            }
+
+            let err = io::Error::last_os_error();
+            return err.raw_os_error() == Some(libc::ESRCH);
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = pid;
+            true
+        }
     }
 }
