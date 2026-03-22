@@ -10,7 +10,10 @@ enum Token {
         normalized: String,
         joined_to_prev: bool,
     },
-    Sep { ch: char, spoken: bool },
+    Sep {
+        ch: char,
+        spoken: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
