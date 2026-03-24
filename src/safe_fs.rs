@@ -47,12 +47,12 @@ pub(crate) fn write(path: &Path, contents: impl AsRef<[u8]>) -> io::Result<()> {
 }
 
 fn ensure_existing_regular_file(path: &Path, operation: &str) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+    let metadata = fs::metadata(path)?;
     ensure_regular_file(path, &metadata.file_type(), operation)
 }
 
 fn ensure_regular_file_or_missing(path: &Path, operation: &str) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
+    match fs::metadata(path) {
         Ok(metadata) => ensure_regular_file(path, &metadata.file_type(), operation),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
@@ -104,9 +104,7 @@ fn describe_file_type(file_type: &fs::FileType) -> &'static str {
 #[cfg(unix)]
 fn open_for_read(path: &Path) -> io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    options.read(true).custom_flags(libc::O_NONBLOCK);
     options.open(path)
 }
 
@@ -117,7 +115,7 @@ fn open_for_write(path: &Path) -> io::Result<fs::File> {
         .write(true)
         .create(true)
         .truncate(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        .custom_flags(libc::O_NONBLOCK);
     options.open(path)
 }
 
@@ -141,30 +139,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn read_rejects_symlink_even_when_target_is_regular_file() {
+    fn read_follows_symlink_when_target_is_regular_file() {
         let dir = unique_temp_dir("safe-fs-read-symlink");
         let target = dir.join("target.txt");
         let link = dir.join("link.txt");
         fs::write(&target, "secret").expect("write target");
         symlink(&target, &link).expect("create symlink");
 
-        let err = read_to_string(&link).expect_err("symlink read should be rejected");
-
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        let contents = read_to_string(&link).expect("symlink read should succeed");
+        assert_eq!(contents, "secret");
     }
 
     #[cfg(unix)]
     #[test]
-    fn write_rejects_symlink_even_when_target_is_regular_file() {
+    fn write_follows_symlink_when_target_is_regular_file() {
         let dir = unique_temp_dir("safe-fs-write-symlink");
         let target = dir.join("target.txt");
         let link = dir.join("link.txt");
         fs::write(&target, "seed").expect("write target");
         symlink(&target, &link).expect("create symlink");
 
-        let err = write(&link, b"updated").expect_err("symlink write should be rejected");
-
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert_eq!(fs::read_to_string(target).expect("read target"), "seed");
+        write(&link, b"updated").expect("symlink write should succeed");
+        assert_eq!(fs::read_to_string(target).expect("read target"), "updated");
     }
 }
