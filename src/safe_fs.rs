@@ -30,7 +30,7 @@ pub(crate) fn read_to_string(path: &Path) -> io::Result<String> {
 }
 
 pub(crate) fn write(path: &Path, contents: impl AsRef<[u8]>) -> io::Result<()> {
-    ensure_regular_file_or_missing(path, "write")?;
+    ensure_writable_regular_file_or_missing(path, "write")?;
 
     #[cfg(unix)]
     {
@@ -51,8 +51,8 @@ fn ensure_existing_regular_file(path: &Path, operation: &str) -> io::Result<()> 
     ensure_regular_file(path, &metadata.file_type(), operation)
 }
 
-fn ensure_regular_file_or_missing(path: &Path, operation: &str) -> io::Result<()> {
-    match fs::metadata(path) {
+fn ensure_writable_regular_file_or_missing(path: &Path, operation: &str) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
         Ok(metadata) => ensure_regular_file(path, &metadata.file_type(), operation),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
@@ -115,7 +115,7 @@ fn open_for_write(path: &Path) -> io::Result<fs::File> {
         .write(true)
         .create(true)
         .truncate(true)
-        .custom_flags(libc::O_NONBLOCK);
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     options.open(path)
 }
 
@@ -152,14 +152,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn write_follows_symlink_when_target_is_regular_file() {
+    fn write_rejects_symlink_even_when_target_is_regular_file() {
         let dir = unique_temp_dir("safe-fs-write-symlink");
         let target = dir.join("target.txt");
         let link = dir.join("link.txt");
         fs::write(&target, "seed").expect("write target");
         symlink(&target, &link).expect("create symlink");
 
-        write(&link, b"updated").expect("symlink write should succeed");
-        assert_eq!(fs::read_to_string(target).expect("read target"), "updated");
+        let err = write(&link, b"updated").expect_err("symlink write should be rejected");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read_to_string(target).expect("read target"), "seed");
     }
 }
