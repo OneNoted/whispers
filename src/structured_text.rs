@@ -84,6 +84,7 @@ fn meta_wrapped_candidate_matches(text: &str, candidate: &str) -> bool {
         };
         candidate_is_confident(&parsed)
             && parsed.normalized == candidate
+            && candidate_has_clean_trailing_boundary(&tokens, parsed.end)
             && non_candidate_tokens_are_meta(&tokens[..start])
             && non_candidate_tokens_are_meta(&tokens[parsed.end..])
     })
@@ -122,6 +123,7 @@ fn is_meta_word(word: &str) -> bool {
             | "that"
             | "it"
             | "its"
+            | "s"
             | "url"
             | "link"
             | "website"
@@ -630,6 +632,8 @@ mod tests {
             "portfolio . notes . supply",
             "portfolio.notes.supply"
         ));
+        assert!(output_matches_candidate("it's example.com", "example.com"));
+        assert!(output_matches_candidate("that's /api/v1", "/api/v1"));
         assert!(output_matches_candidate(
             "portfolio. Notes. Supply is the URL",
             "portfolio.notes.supply"
@@ -655,7 +659,10 @@ mod tests {
     #[test]
     fn possessive_suffix_is_not_treated_as_meta_wrapper() {
         assert!(!output_matches_candidate("example.com's", "example.com"));
-        assert!(!output_matches_candidate("@scope/package's", "@scope/package"));
+        assert!(!output_matches_candidate(
+            "@scope/package's",
+            "@scope/package"
+        ));
     }
 
     #[test]
