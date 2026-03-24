@@ -213,15 +213,7 @@ pub fn update_config_rewrite_selection(config_path: &Path, selected_model: &str)
         .map_err(|e| WhsprError::Config(format!("failed to parse config: {e}")))?;
 
     ensure_standard_postprocess_tables(&mut doc);
-    let mode = match doc["postprocess"]
-        .as_table_like()
-        .and_then(|table| table.get("mode"))
-        .and_then(|item| item.as_str())
-    {
-        Some("raw" | "legacy_basic") => PostprocessMode::Rewrite,
-        _ => PostprocessMode::Rewrite,
-    };
-    doc["postprocess"]["mode"] = toml_edit::value(mode.as_str());
+    doc["postprocess"]["mode"] = toml_edit::value(PostprocessMode::Rewrite.as_str());
     let rewrite_backend = doc["rewrite"]
         .as_table_like()
         .and_then(|table| table.get("backend"))
