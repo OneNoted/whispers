@@ -271,6 +271,27 @@ mod tests {
     }
 
     #[test]
+    fn build_rewrite_plan_prefers_structured_literal_for_contraction_wrapper() {
+        let mut config = Config::default();
+        config.postprocess.mode = PostprocessMode::Rewrite;
+
+        let transcript = Transcript {
+            raw_text: "it's example.com".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let plan = build_rewrite_plan(
+            &config,
+            &load_runtime_text_resources(&config),
+            &transcript,
+            None,
+            None,
+        );
+        assert_eq!(plan.fallback_text, "example.com");
+    }
+
+    #[test]
     fn build_rewrite_plan_keeps_full_fallback_when_structured_text_is_embedded() {
         let mut config = Config::default();
         config.postprocess.mode = PostprocessMode::Rewrite;
@@ -291,6 +312,30 @@ mod tests {
         assert_eq!(
             plan.fallback_text,
             "Check portfolio. Notes. Supply tomorrow"
+        );
+    }
+
+    #[test]
+    fn build_rewrite_plan_keeps_possessive_structured_literal_fallback() {
+        let mut config = Config::default();
+        config.postprocess.mode = PostprocessMode::Rewrite;
+
+        let transcript = Transcript {
+            raw_text: "example.com's".into(),
+            detected_language: Some("en".into()),
+            segments: Vec::new(),
+        };
+
+        let plan = build_rewrite_plan(
+            &config,
+            &load_runtime_text_resources(&config),
+            &transcript,
+            None,
+            None,
+        );
+        assert_eq!(
+            plan.fallback_text,
+            crate::cleanup::correction_aware_text(&transcript)
         );
     }
 }

@@ -27,6 +27,13 @@ struct EncodedAudioUpload {
     mime_type: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WavLengths {
+    data_len: usize,
+    data_len_u32: u32,
+    riff_len_u32: u32,
+}
+
 #[derive(Clone)]
 pub struct CloudService {
     client: reqwest::Client,
@@ -347,17 +354,29 @@ fn encode_flac_pcm16(audio: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
     Ok(sink.as_slice().to_vec())
 }
 
+fn wav_lengths(sample_count: usize, bytes_per_sample: usize) -> Result<WavLengths> {
+    let size_error = || WhsprError::Audio("audio buffer too large to encode as WAV".into());
+    let data_len = sample_count
+        .checked_mul(bytes_per_sample)
+        .ok_or_else(size_error)?;
+    let data_len_u32 = u32::try_from(data_len).map_err(|_| size_error())?;
+    let riff_len_u32 = 36u32.checked_add(data_len_u32).ok_or_else(size_error)?;
+    Ok(WavLengths {
+        data_len,
+        data_len_u32,
+        riff_len_u32,
+    })
+}
+
 fn encode_wav_pcm16(audio: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
     let channels: u16 = 1;
     let bits_per_sample: u16 = 16;
     let bytes_per_sample = (bits_per_sample / 8) as usize;
-    let data_len = audio
-        .len()
-        .checked_mul(bytes_per_sample)
-        .ok_or_else(|| WhsprError::Audio("audio buffer too large to encode".into()))?;
+    let lengths = wav_lengths(audio.len(), bytes_per_sample)?;
+    let data_len = lengths.data_len;
     let mut bytes = Vec::with_capacity(44 + data_len);
     bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36u32 + data_len as u32).to_le_bytes());
+    bytes.extend_from_slice(&lengths.riff_len_u32.to_le_bytes());
     bytes.extend_from_slice(b"WAVE");
     bytes.extend_from_slice(b"fmt ");
     bytes.extend_from_slice(&16u32.to_le_bytes());
@@ -370,7 +389,7 @@ fn encode_wav_pcm16(audio: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
     bytes.extend_from_slice(&block_align.to_le_bytes());
     bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
     bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&(data_len as u32).to_le_bytes());
+    bytes.extend_from_slice(&lengths.data_len_u32.to_le_bytes());
     for sample in audio {
         let pcm = (*sample).clamp(-1.0, 1.0);
         let pcm = (pcm * i16::MAX as f32).round() as i16;
@@ -614,6 +633,43 @@ mod tests {
         let bytes = encode_wav_pcm16(&[0.0, 0.5, -0.5], 16_000).expect("wav bytes");
         assert_eq!(&bytes[..4], b"RIFF");
         assert_eq!(&bytes[8..12], b"WAVE");
+    }
+
+    #[test]
+    fn wav_lengths_reports_expected_sizes() {
+        let lengths = wav_lengths(3, 2).expect("wav lengths");
+        assert_eq!(
+            lengths,
+            WavLengths {
+                data_len: 6,
+                data_len_u32: 6,
+                riff_len_u32: 42,
+            }
+        );
+    }
+
+    #[test]
+    fn wav_lengths_accepts_max_reachable_pcm16_riff_payload() {
+        let sample_count = (u32::MAX as usize - 36) / 2;
+        let lengths = wav_lengths(sample_count, 2).expect("max wav lengths");
+        assert_eq!(lengths.data_len, sample_count * 2);
+        assert_eq!(lengths.data_len_u32 as usize, sample_count * 2);
+        assert_eq!(lengths.riff_len_u32 as usize, sample_count * 2 + 36);
+    }
+
+    #[test]
+    fn wav_lengths_rejects_riff_size_overflow() {
+        let sample_count = (u32::MAX as usize - 35) / 2;
+        let err = wav_lengths(sample_count, 2).expect_err("riff overflow should fail");
+        assert!(err.to_string().contains("too large to encode as WAV"));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn wav_lengths_rejects_data_size_overflow() {
+        let sample_count = (u32::MAX as usize / 2) + 1;
+        let err = wav_lengths(sample_count, 2).expect_err("data overflow should fail");
+        assert!(err.to_string().contains("too large to encode as WAV"));
     }
 
     #[test]
