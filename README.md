@@ -7,26 +7,23 @@ Fast speech-to-text dictation for Wayland.
 ## Install
 
 ```sh
-# default install
+# default install: CUDA + local rewrite + OSD
 cargo install whispers
 
-# CUDA
-cargo install whispers --features cuda
-
-# local rewrite support
-cargo install whispers --features local-rewrite
-
-# CUDA + local rewrite
-cargo install whispers --features cuda,local-rewrite
-
 # no OSD
-cargo install whispers --no-default-features
+cargo install whispers --no-default-features --features cuda,local-rewrite
+
+# no local rewrite
+cargo install whispers --no-default-features --features cuda,osd
+
+# CPU-only
+cargo install whispers --no-default-features --features local-rewrite,osd
 ```
 
 If you want the latest GitHub version instead of crates.io:
 
 ```sh
-cargo install --git https://github.com/OneNoted/whispers --features cuda,local-rewrite
+cargo install --git https://github.com/OneNoted/whispers
 ```
 
 ## Requirements
@@ -35,7 +32,7 @@ cargo install --git https://github.com/OneNoted/whispers --features cuda,local-r
 - `wl-copy`
 - access to `/dev/uinput`
 - Rust 1.85+
-- CUDA toolkit if you enable the `cuda` feature
+- CUDA toolkit for the default install; opt out with `--no-default-features` if you need a CPU-only build
 
 If `/dev/uinput` is blocked, add your user to the `input` group and log back in:
 
@@ -111,8 +108,8 @@ whispers completions zsh
 ## Notes
 
 - Local ASR is the default.
-- Local rewrite is installed automatically with `--features local-rewrite`.
-- `whispers` installs the helper rewrite worker for you when that feature is enabled.
+- The default install includes CUDA, local rewrite, and the OSD helper.
+- `whispers` installs the helper rewrite worker for you when `local-rewrite` is enabled.
 - Shell completions are printed to `stdout`.
 
 ## Troubleshooting
