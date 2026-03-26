@@ -23,6 +23,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake clang pkg-config libasound2-dev
 
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.30
+        with:
+          cuda: "12.5.0"
+
+      - name: Expose CUDA toolkit paths
+        run: |
+          echo "CUDAToolkit_ROOT=$CUDA_PATH" >> "$GITHUB_ENV"
+          sudo ln -sfn "$CUDA_PATH" /usr/local/cuda
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
@@ -48,6 +58,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake clang pkg-config libasound2-dev
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.30
+        with:
+          cuda: "12.5.0"
+
+      - name: Expose CUDA toolkit paths
+        run: |
+          echo "CUDAToolkit_ROOT=$CUDA_PATH" >> "$GITHUB_ENV"
+          sudo ln -sfn "$CUDA_PATH" /usr/local/cuda
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

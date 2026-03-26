@@ -79,7 +79,7 @@ font8x8 = { version = "0.3", optional = true }
 fontdue = { version = "0.9", optional = true }
 
 [features]
-default = ["osd"]
+default = ["cuda", "local-rewrite", "osd"]
 cuda = ["whisper-rs/cuda", "llama-cpp-2?/cuda"]
 local-rewrite = ["dep:llama-cpp-2"]
 osd = [
