@@ -72,3 +72,23 @@ jobs:
           else
             echo "CUDA toolkit not available on this runner; skipping cuda feature check"
           fi
+
+  release-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libasound2-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release bundle
+        run: scripts/build-release-bundle.sh
