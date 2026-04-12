@@ -29,6 +29,11 @@ If you want the latest GitHub version instead of crates.io:
 cargo install --git https://github.com/OneNoted/whispers --features cuda,local-rewrite
 ```
 
+Arch Linux users can also install:
+
+- `whispers-bin` for the prebuilt GitHub release bundle (x86_64, `local-rewrite` + `osd`)
+- `whispers-git` for the latest `main` branch build with the same packaged features
+
 ## Requirements
 
 - Linux with Wayland
@@ -143,3 +148,15 @@ Bundled third-party code under `vendor/whisper-rs-sys` carries upstream
 license notices and file-level exceptions. See [NOTICE](NOTICE), the vendor
 license files, and the relevant per-file headers under
 `vendor/whisper-rs-sys/whisper.cpp`.
+
+## Releases
+
+Tagged releases publish a Linux x86_64 bundle with:
+
+- `whispers`
+- `whispers-osd`
+- `whispers-rewrite-worker`
+- Bash, Zsh, and Fish completions
+- `README.md`, `config.example.toml`, `LICENSE`, and `NOTICE`
+
+That bundle is what the `whispers-bin` AUR package installs.
