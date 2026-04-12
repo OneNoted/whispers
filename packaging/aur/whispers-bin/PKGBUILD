@@ -12,7 +12,7 @@ conflicts=('whispers' 'whispers-git')
 source=(
   "$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/whispers-$pkgver-x86_64-unknown-linux-gnu.tar.gz"
 )
-sha256sums=('229bfefd9de300b0a3a66dc0fd0fd004e43c065faa8c6dc40a103f70a1b1cd93')
+sha256sums=('b5f1ce5d1e66cece42bb5129c0eb7ab93cc118a7e705847a4a1c8e75cd60ad1e')
 
 package() {
   local bundle_dir="$srcdir/whispers-$pkgver-x86_64-unknown-linux-gnu"
