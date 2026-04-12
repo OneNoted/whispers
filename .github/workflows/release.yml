@@ -23,8 +23,15 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout current ref
+        if: github.event_name != 'workflow_dispatch' || inputs.publish_release != true
         uses: actions/checkout@v5
+
+      - name: Checkout requested release tag
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -65,6 +72,12 @@ jobs:
             fi
             if [[ "$tag_name" != "v$version" ]]; then
               echo "::error::tag ${tag_name} does not match Cargo.toml version v${version}"
+              exit 1
+            fi
+            checked_out_commit=$(git rev-parse HEAD)
+            tag_commit=$(git rev-list -n1 "$tag_name")
+            if [[ "$checked_out_commit" != "$tag_commit" ]]; then
+              echo "::error::checked out ${checked_out_commit} but tag ${tag_name} points to ${tag_commit}"
               exit 1
             fi
           fi

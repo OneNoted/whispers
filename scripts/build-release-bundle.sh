@@ -15,7 +15,7 @@ tarball_path="$dist_dir/${bundle_name}.tar.gz"
 sha_path="$dist_dir/${bundle_name}.tar.gz.sha256"
 commit_sha="$(git rev-parse --short=12 HEAD)"
 commit_epoch="$(git log -1 --format=%ct HEAD)"
-target_dir="target/${profile}"
+target_dir="target/${target_triple}/${profile}"
 
 mkdir -p "$dist_dir"
 rm -rf "$bundle_root" "$tarball_path" "$sha_path"
@@ -23,6 +23,7 @@ rm -rf "$bundle_root" "$tarball_path" "$sha_path"
 cargo build \
   --profile "$profile" \
   --locked \
+  --target "$target_triple" \
   --no-default-features \
   --features "$features"
 
