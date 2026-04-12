@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Upload assets to a GitHub release
+        required: false
+        default: false
+        type: boolean
+      tag_name:
+        description: Release tag to publish (required when publish_release is true)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libasound2-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compute release metadata
+        id: meta
+        env:
+          INPUT_PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          version=$(awk -F '"' '$1 ~ /^version *=/ { print $2; exit }' Cargo.toml)
+          bundle="whispers-${version}-x86_64-unknown-linux-gnu"
+          publish=false
+          tag_name=""
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            publish=true
+            tag_name="${GITHUB_REF_NAME}"
+          elif [[ "${INPUT_PUBLISH_RELEASE:-false}" == "true" ]]; then
+            publish=true
+            tag_name="${INPUT_TAG_NAME}"
+          fi
+
+          if [[ "$publish" == "true" ]]; then
+            if [[ -z "$tag_name" ]]; then
+              echo "::error::tag_name is required when publish_release=true"
+              exit 1
+            fi
+            if [[ "$tag_name" != "v$version" ]]; then
+              echo "::error::tag ${tag_name} does not match Cargo.toml version v${version}"
+              exit 1
+            fi
+          fi
+
+          {
+            echo "bundle=$bundle"
+            echo "publish=$publish"
+            echo "tag_name=$tag_name"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build release bundle
+        run: scripts/build-release-bundle.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Upload release bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.bundle }}
+          path: |
+            dist/${{ steps.meta.outputs.bundle }}.tar.gz
+            dist/${{ steps.meta.outputs.bundle }}.tar.gz.sha256
+
+      - name: Publish GitHub release
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          BUNDLE_NAME: ${{ steps.meta.outputs.bundle }}
+        run: |
+          set -euo pipefail
+
+          assets=(
+            "dist/${BUNDLE_NAME}.tar.gz"
+            "dist/${BUNDLE_NAME}.tar.gz.sha256"
+          )
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG_NAME" "${assets[@]}" \
+              --title "$TAG_NAME" \
+              --generate-notes \
+              --target "$GITHUB_SHA"
+          fi
