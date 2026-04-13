@@ -1,6 +1,6 @@
 [package]
 name = "whispers"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.85"
 description = "Speech-to-text dictation tool for Wayland"
@@ -105,4 +105,4 @@ path = "src/bin/whispers-rewrite-worker/main.rs"
 required-features = ["local-rewrite"]
 
 [dev-dependencies]
-httpmock = "0.7"
+httpmock = "0.8.3"
