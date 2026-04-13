@@ -31,6 +31,9 @@ jobs:
   ensure-release:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout workflow ref
+        uses: actions/checkout@v5
+
       - name: Ensure GitHub release exists
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,6 +47,11 @@ jobs:
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             exit 0
+          fi
+
+          if ! git ls-remote --exit-code origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            echo "::error::tag $TAG_NAME does not exist on origin"
+            exit 1
           fi
 
           gh release create "$TAG_NAME" \
@@ -130,23 +138,10 @@ jobs:
       - name: Upload release bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.bundle }}
+          name: portable-release-bundle
           path: |
             dist/${{ steps.meta.outputs.bundle }}.tar.gz
             dist/${{ steps.meta.outputs.bundle }}.tar.gz.sha256
-
-      - name: Publish GitHub release
-        if: steps.meta.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
-          BUNDLE_NAME: ${{ steps.meta.outputs.bundle }}
-        run: |
-          set -euo pipefail
-
-          assets=("dist/${BUNDLE_NAME}.tar.gz" "dist/${BUNDLE_NAME}.tar.gz.sha256")
-
-          gh release upload "$TAG_NAME" "${assets[@]}" --clobber
 
   build-cuda:
     if: github.event_name == 'push' || inputs.bundle_variant == 'cuda'
@@ -244,30 +239,106 @@ jobs:
           final_bundle="${{ steps.meta.outputs.bundle }}"
 
           if [[ "$source_bundle" != "$final_bundle" && -f "dist/${source_bundle}.tar.gz" ]]; then
-            mv "dist/${source_bundle}.tar.gz" "dist/${final_bundle}.tar.gz"
+            temp_dir="$(mktemp -d)"
+            cleanup() {
+              rm -rf "$temp_dir"
+            }
+            trap cleanup EXIT
+
+            tar -xzf "dist/${source_bundle}.tar.gz" -C "$temp_dir"
+            mv "$temp_dir/${source_bundle}" "$temp_dir/${final_bundle}"
+
+            tar \
+              --sort=name \
+              --mtime="@$(git log -1 --format=%ct HEAD)" \
+              --owner=0 \
+              --group=0 \
+              --numeric-owner \
+              -C "$temp_dir" \
+              -czf "dist/${final_bundle}.tar.gz" \
+              "$final_bundle"
+
             (
               cd dist
               sha256sum "${final_bundle}.tar.gz" > "${final_bundle}.tar.gz.sha256"
-              rm -f "${source_bundle}.tar.gz.sha256"
+              rm -f "${source_bundle}.tar.gz" "${source_bundle}.tar.gz.sha256"
             )
           fi
 
       - name: Upload CUDA release bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.bundle }}
+          name: cuda-release-bundle
           path: |
             dist/${{ steps.meta.outputs.bundle }}.tar.gz
             dist/${{ steps.meta.outputs.bundle }}.tar.gz.sha256
 
-      - name: Publish GitHub release
-        if: steps.meta.outputs.publish == 'true'
+  publish-release-push:
+    if: github.event_name == 'push'
+    needs:
+      - ensure-release
+      - build-portable
+      - build-cuda
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: portable-release-bundle
+          path: dist
+
+      - name: Download CUDA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cuda-release-bundle
+          path: dist
+
+      - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
-          BUNDLE_NAME: ${{ steps.meta.outputs.bundle }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          gh release upload "$TAG_NAME" dist/* --clobber
 
-          assets=("dist/${BUNDLE_NAME}.tar.gz" "dist/${BUNDLE_NAME}.tar.gz.sha256")
-          gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+  publish-release-portable-dispatch:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.bundle_variant != 'cuda'
+    needs:
+      - ensure-release
+      - build-portable
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: portable-release-bundle
+          path: dist
+
+      - name: Publish portable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG_NAME" dist/* --clobber
+
+  publish-release-cuda-dispatch:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.bundle_variant == 'cuda'
+    needs:
+      - ensure-release
+      - build-cuda
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download CUDA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cuda-release-bundle
+          path: dist
+
+      - name: Publish CUDA release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG_NAME" dist/* --clobber
