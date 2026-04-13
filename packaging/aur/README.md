@@ -2,10 +2,15 @@
 
 This repository keeps the maintained AUR sources for:
 
-- `whispers-bin`: installs the GitHub release bundle
-- `whispers-git`: builds the latest `main` branch from source
+- `whispers-bin`: installs the portable GitHub release bundle
+- `whispers-git`: builds the latest `main` branch without CUDA
+- `whispers-cuda-bin`: installs the CUDA-enabled GitHub release bundle
+- `whispers-cuda-git`: builds the latest `main` branch with CUDA
 
-Both packages currently ship the portable `local-rewrite,osd` feature set.
+Current feature sets:
+
+- `whispers-bin` / `whispers-git`: `local-rewrite,osd`
+- `whispers-cuda-bin` / `whispers-cuda-git`: `cuda,local-rewrite,osd`
 
 ## Refreshing metadata
 
@@ -16,11 +21,11 @@ directory:
 makepkg --printsrcinfo > .SRCINFO
 ```
 
-## Updating `whispers-bin`
+## Updating `whispers-bin` / `whispers-cuda-bin`
 
 1. Cut a GitHub release for `vX.Y.Z`.
-2. Update `pkgver` and `sha256sums` in `packaging/aur/whispers-bin/PKGBUILD`.
-3. Regenerate `packaging/aur/whispers-bin/.SRCINFO`.
+2. Update `pkgver` and `sha256sums` in the matching `*-bin/PKGBUILD`.
+3. Regenerate the matching `*-bin/.SRCINFO`.
 
 ## Publishing to the AUR
 
@@ -29,3 +34,5 @@ matching directory to:
 
 - `ssh://aur@aur.archlinux.org/whispers-bin.git`
 - `ssh://aur@aur.archlinux.org/whispers-git.git`
+- `ssh://aur@aur.archlinux.org/whispers-cuda-bin.git`
+- `ssh://aur@aur.archlinux.org/whispers-cuda-git.git`
