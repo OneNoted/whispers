@@ -18,6 +18,6 @@ pkgbase = whispers-cuda-bin
 	conflicts = whispers-git
 	conflicts = whispers-cuda-git
 	source = whispers-cuda-bin-0.2.1.tar.gz::https://github.com/OneNoted/whispers/releases/download/v0.2.1/whispers-cuda-0.2.1-x86_64-unknown-linux-gnu.tar.gz
-	sha256sums = REPLACE_WITH_CUDA_RELEASE_SHA256
+	sha256sums = 8cc719325a543794838028bf332203012628f35224c093154a65d4374530bcf0
 
 pkgname = whispers-cuda-bin
