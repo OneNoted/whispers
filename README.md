@@ -36,6 +36,20 @@
 
 ### Arch Linux (`paru`)
 
+#### CUDA-enabled
+
+```sh
+# prebuilt GitHub release bundle with CUDA support
+paru -S whispers-cuda-bin
+
+# latest main branch build with CUDA support
+paru -S whispers-cuda-git
+```
+
+Use these when you want the CUDA-enabled local path from the AUR.
+
+#### Portable / non-CUDA
+
 ```sh
 # prebuilt GitHub release bundle
 paru -S whispers-bin
@@ -44,9 +58,10 @@ paru -S whispers-bin
 paru -S whispers-git
 ```
 
-- `whispers-bin` installs the published Linux x86_64 release bundle.
-- `whispers-git` builds the latest `main` branch from source.
-- Both AUR packages currently ship the portable `local-rewrite,osd` feature set.
+- `whispers-cuda-bin` installs the published Linux x86_64 CUDA bundle.
+- `whispers-cuda-git` builds the latest `main` branch with `cuda,local-rewrite,osd`.
+- `whispers-bin` installs the published portable non-CUDA Linux x86_64 bundle.
+- `whispers-git` builds the latest `main` branch with the portable `local-rewrite,osd` feature set.
 
 ### Cargo
 
@@ -175,13 +190,13 @@ Those bundles include the current status snapshot plus best-effort stack and ope
 
 Tagged releases publish a Linux x86_64 bundle with:
 
-- `whispers`
-- `whispers-osd`
-- `whispers-rewrite-worker`
+- a portable `whispers-<version>-x86_64-unknown-linux-gnu.tar.gz`
+- a CUDA-enabled `whispers-cuda-<version>-x86_64-unknown-linux-gnu.tar.gz`
+- `whispers`, `whispers-osd`, and `whispers-rewrite-worker`
 - Bash, Zsh, and Fish completions
 - `README.md`, `config.example.toml`, `LICENSE`, and `NOTICE`
 
-That bundle is what the `whispers-bin` AUR package installs.
+Those bundles are what the `whispers-bin` and `whispers-cuda-bin` AUR packages install.
 
 ## License
 

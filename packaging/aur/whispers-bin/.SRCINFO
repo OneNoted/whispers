@@ -14,6 +14,8 @@ pkgbase = whispers-bin
 	provides = whispers
 	conflicts = whispers
 	conflicts = whispers-git
+	conflicts = whispers-cuda-bin
+	conflicts = whispers-cuda-git
 	source = whispers-bin-0.2.1.tar.gz::https://github.com/OneNoted/whispers/releases/download/v0.2.1/whispers-0.2.1-x86_64-unknown-linux-gnu.tar.gz
 	sha256sums = b5f1ce5d1e66cece42bb5129c0eb7ab93cc118a7e705847a4a1c8e75cd60ad1e
 
