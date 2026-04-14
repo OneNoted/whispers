@@ -1,10 +1,12 @@
 mod clipboard;
 mod keyboard;
+mod preflight;
 
 #[cfg(test)]
 mod tests;
 
 use crate::error::{Result, WhsprError};
+pub use preflight::{InjectionReadinessReport, validate_injection_prerequisites};
 
 const DEVICE_READY_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
 const CLIPBOARD_READY_DELAY: std::time::Duration = std::time::Duration::from_millis(180);

@@ -111,6 +111,7 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
     apply::apply_setup_config(&ui, &config_path, config_path_override, &selections)?;
     side_effects::maybe_create_agentic_starter_files(&ui, &config_path, &selections)?;
     side_effects::cleanup_stale_asr_workers(&ui, &config_path)?;
+    let injection_setup = side_effects::maybe_setup_injection_access(&ui)?;
 
     if let Some(rewrite_model) = selections.rewrite_model {
         ui.print_ok(format!(
@@ -125,7 +126,10 @@ pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
     ui.blank();
     report::print_setup_summary(&ui, &selections);
     ui.blank();
-    report::print_setup_complete(&ui);
+    let injection_readiness = crate::inject::InjectionReadinessReport::collect();
+    report::print_injection_readiness(&ui, &injection_readiness, &injection_setup);
+    ui.blank();
+    report::print_setup_complete(&ui, &injection_readiness, &injection_setup);
 
     Ok(())
 }
