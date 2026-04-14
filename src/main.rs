@@ -9,7 +9,7 @@ use whispers::config::Config;
 use whispers::error::Result;
 use whispers::rewrite_protocol::RewriteSurfaceKind;
 use whispers::{
-    agentic_rewrite, app, asr, asr_model, audio, cloud, completions, file_audio, model,
+    agentic_rewrite, app, asr, asr_model, audio, cloud, completions, file_audio, inject, model,
     personalization, postprocess, rewrite_model, runtime_support, setup,
 };
 
@@ -104,6 +104,7 @@ async fn run_default(cli: &Cli) -> Result<()> {
     // Load config
     let config = Config::load(cli.config.as_deref())?;
     asr::validation::validate_transcription_config(&config)?;
+    inject::validate_injection_prerequisites()?;
     tracing::debug!("config loaded: {config:?}");
 
     app::run(config, pid_lock).await

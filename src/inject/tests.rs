@@ -1,5 +1,6 @@
 use crate::error::WhsprError;
 
+use super::preflight::InjectionReadinessIssue;
 use super::*;
 
 #[test]
@@ -51,4 +52,49 @@ fn run_wl_copy_reports_timeout() {
 async fn inject_empty_text_is_noop() {
     let injector = TextInjector::with_wl_copy_command("/bin/true", &[]);
     injector.inject("").await.expect("empty text should no-op");
+}
+
+#[test]
+fn readiness_report_formats_missing_uinput_guidance() {
+    let report =
+        InjectionReadinessReport::from_issues(vec![InjectionReadinessIssue::MissingUinputDevice]);
+    assert!(!report.is_ready());
+    assert!(
+        report
+            .issue_lines()
+            .iter()
+            .any(|line| line.contains("/dev/uinput"))
+    );
+    assert!(
+        report
+            .fix_lines()
+            .iter()
+            .any(|line| line.contains("sudo modprobe uinput"))
+    );
+
+    let err = report.as_error().expect("missing uinput should fail");
+    match err {
+        WhsprError::Injection(msg) => {
+            assert!(
+                msg.contains("paste injection is not ready"),
+                "unexpected: {msg}"
+            );
+            assert!(msg.contains("uinput` kernel module"), "unexpected: {msg}");
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+}
+
+#[test]
+fn readiness_report_formats_permission_guidance() {
+    let report = InjectionReadinessReport::from_issues(vec![
+        InjectionReadinessIssue::UinputPermissionDenied,
+    ]);
+    assert!(report.has_uinput_issue());
+    assert!(
+        report
+            .fix_lines()
+            .iter()
+            .any(|line| line.contains("`input` group"))
+    );
 }
