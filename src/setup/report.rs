@@ -88,9 +88,15 @@ pub(super) fn print_injection_readiness(
     }
 
     if setup.changed_groups {
-        ui.print_info(
-            "If you were just added to the `uinput` group, log out and back in before testing.",
-        );
+        if setup.udev_reload_succeeded {
+            ui.print_info(
+                "If you were just added to the `uinput` group, log out and back in before testing.",
+            );
+        } else {
+            ui.print_info(
+                "If you were just added to the `uinput` group, log out and back in after finishing the remaining paste injection steps.",
+            );
+        }
     }
 
     for line in readiness.fix_lines() {
@@ -110,6 +116,7 @@ pub(super) fn print_setup_complete(
             readiness.is_ready(),
             setup.changed_groups,
             readiness.only_requires_relogin(),
+            setup.udev_reload_succeeded,
         )
     );
     ui.print_section("Example keybind");
@@ -121,10 +128,11 @@ pub(super) fn setup_complete_message(
     is_ready: bool,
     changed_groups: bool,
     only_requires_relogin: bool,
+    udev_reload_succeeded: bool,
 ) -> &'static str {
     if is_ready {
         "You can now use whispers."
-    } else if changed_groups && only_requires_relogin {
+    } else if changed_groups && only_requires_relogin && udev_reload_succeeded {
         "Log out and back in, then use whispers."
     } else if changed_groups {
         "Log out and back in, then finish any remaining paste injection steps above before using whispers."
