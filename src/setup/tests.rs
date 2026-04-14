@@ -63,6 +63,7 @@ fn group_membership_failures_become_warnings_without_marking_success() {
     .expect("errors should become warnings");
 
     assert!(!outcome.changed_groups);
+    assert!(!outcome.group_membership_ready);
     assert!(warning.contains("Failed to add the current user"));
     assert!(warning.contains("group add failed"));
 }
@@ -75,17 +76,31 @@ fn group_membership_success_marks_logout_as_needed() {
 
     assert!(warning.is_none());
     assert!(outcome.changed_groups);
+    assert!(outcome.group_membership_ready);
     assert!(!outcome.udev_reload_succeeded);
+}
+
+#[test]
+fn existing_group_membership_marks_relogin_as_possible_without_new_group_change() {
+    let mut outcome = side_effects::InjectionSetupOutcome::default();
+    let warning =
+        side_effects::record_group_membership_change_result(&mut outcome, "uinput", Ok(false));
+
+    assert!(warning.is_none());
+    assert!(!outcome.changed_groups);
+    assert!(outcome.group_membership_ready);
 }
 
 #[test]
 fn group_change_messages_follow_recorded_reload_status() {
     let success = side_effects::InjectionSetupOutcome {
         changed_groups: true,
+        group_membership_ready: true,
         udev_reload_succeeded: true,
     };
     let failed_reload = side_effects::InjectionSetupOutcome {
         changed_groups: true,
+        group_membership_ready: true,
         udev_reload_succeeded: false,
     };
 
@@ -112,6 +127,24 @@ fn group_change_messages_follow_recorded_reload_status() {
 }
 
 #[test]
+fn relogin_only_completion_allows_reruns_when_group_is_already_configured() {
+    let rerun = side_effects::InjectionSetupOutcome {
+        changed_groups: false,
+        group_membership_ready: true,
+        udev_reload_succeeded: true,
+    };
+    let failed_group_update = side_effects::InjectionSetupOutcome {
+        changed_groups: false,
+        group_membership_ready: false,
+        udev_reload_succeeded: true,
+    };
+
+    assert!(rerun.can_finish_with_relogin_only(true));
+    assert!(!failed_group_update.can_finish_with_relogin_only(true));
+    assert!(!rerun.can_finish_with_relogin_only(false));
+}
+
+#[test]
 fn udev_trigger_waits_for_settle_before_rechecking() {
     assert!(side_effects::UDEV_TRIGGER_ARGS.contains(&"--settle"));
 }
@@ -129,6 +162,10 @@ fn setup_complete_message_stays_aligned_with_remaining_steps() {
     assert_eq!(
         report::setup_complete_message(false, true, false),
         "Log out and back in, then finish any remaining paste injection steps above before using whispers."
+    );
+    assert_eq!(
+        report::setup_complete_message(false, false, true),
+        "Log out and back in, then use whispers."
     );
     assert_eq!(
         report::setup_complete_message(false, false, false),
