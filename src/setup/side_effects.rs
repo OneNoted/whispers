@@ -25,6 +25,7 @@ pub(super) const UDEV_TRIGGER_ARGS: &[&str] = &[
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct InjectionSetupOutcome {
     pub changed_groups: bool,
+    pub group_membership_ready: bool,
     pub udev_reload_succeeded: bool,
 }
 
@@ -56,7 +57,7 @@ impl InjectionSetupOutcome {
     }
 
     pub(super) fn can_finish_with_relogin_only(self, only_requires_relogin: bool) -> bool {
-        self.changed_groups && self.udev_reload_succeeded && only_requires_relogin
+        self.group_membership_ready && self.udev_reload_succeeded && only_requires_relogin
     }
 }
 
@@ -203,9 +204,13 @@ pub(super) fn record_group_membership_change_result(
     match result {
         Ok(true) => {
             outcome.changed_groups = true;
+            outcome.group_membership_ready = true;
             None
         }
-        Ok(false) => None,
+        Ok(false) => {
+            outcome.group_membership_ready = true;
+            None
+        }
         Err(err) => Some(format!(
             "Failed to add the current user to the `{group}` group: {err}"
         )),
