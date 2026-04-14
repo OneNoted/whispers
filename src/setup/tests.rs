@@ -81,6 +81,14 @@ fn group_membership_success_marks_logout_as_needed() {
 }
 
 #[test]
+fn group_exists_uses_nss_sources() {
+    assert!(side_effects::group_exists("root").expect("resolve root group"));
+
+    let missing = format!("whispers-missing-group-{}", std::process::id());
+    assert!(!side_effects::group_exists(&missing).expect("resolve missing group"));
+}
+
+#[test]
 fn existing_group_membership_marks_relogin_as_possible_without_new_group_change() {
     let mut outcome = side_effects::InjectionSetupOutcome::default();
     let warning =
