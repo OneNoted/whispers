@@ -112,11 +112,13 @@ impl InjectionReadinessIssue {
         match self {
             Self::MissingWlCopy => vec!["Install the `wl-clipboard` package.".into()],
             Self::MissingUinputDevice => vec![
+                "Run `whispers setup` to configure `/dev/uinput` automatically.".into(),
                 "Load the `uinput` kernel module: sudo modprobe uinput".into(),
                 "Persist it across reboots if needed: create `/etc/modules-load.d/whispers-uinput.conf` with `uinput`.".into(),
             ],
             Self::UinputPermissionDenied => vec![
-                "Add your user to the `input` group and create a `udev` rule for `/dev/uinput`.".into(),
+                "Run `whispers setup` to create a dedicated `uinput` group and `/dev/uinput` rule.".into(),
+                "Add your user to the `uinput` group and create a `udev` rule for `/dev/uinput`.".into(),
                 "Log out and back in after changing group membership.".into(),
             ],
             Self::UinputUnavailable(_) => {
@@ -132,7 +134,7 @@ impl InjectionReadinessIssue {
                 "`/dev/uinput` is missing; load the `uinput` kernel module".into()
             }
             Self::UinputPermissionDenied => {
-                "`/dev/uinput` is present but not writable by the current user; add a `udev` rule, add your user to the `input` group, then log out and back in".into()
+                "`/dev/uinput` is present but not writable by the current user; create a dedicated `uinput` group, add your user to it, install a `udev` rule, then log out and back in".into()
             }
             Self::UinputUnavailable(detail) => {
                 format!("`/dev/uinput` could not be opened: {detail}")

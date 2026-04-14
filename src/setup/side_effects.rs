@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::process::Command;
-
+use std::ffi::CStr;
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use crate::config::{self, TranscriptionBackend};
 use crate::error::Result;
@@ -9,9 +9,10 @@ use crate::ui::SetupUi;
 
 use super::SetupSelections;
 
+const UINPUT_GROUP: &str = "uinput";
 const MODULES_LOAD_PATH: &str = "/etc/modules-load.d/whispers-uinput.conf";
 const UDEV_RULE_PATH: &str = "/etc/udev/rules.d/70-whispers-uinput.rules";
-const UDEV_RULE_CONTENT: &str = "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n";
+const UDEV_RULE_CONTENT: &str = "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"uinput\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n";
 const MODULES_LOAD_CONTENT: &str = "uinput\n";
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -128,7 +129,12 @@ pub(super) fn maybe_setup_injection_access(ui: &SetupUi) -> Result<InjectionSetu
             "Failed to install the `/dev/uinput` udev rule: {err}"
         ));
     }
-    if add_user_to_group(ui, "input")? {
+    if let Err(err) = ensure_group_exists(ui, UINPUT_GROUP) {
+        ui.print_warn(format!(
+            "Failed to ensure the `{UINPUT_GROUP}` group exists: {err}"
+        ));
+    }
+    if add_user_to_group(ui, UINPUT_GROUP)? {
         outcome.changed_groups = true;
     }
     if let Err(err) = reload_udev(ui) {
@@ -180,6 +186,29 @@ fn add_user_to_group(ui: &SetupUi, group: &str) -> Result<bool> {
     Ok(true)
 }
 
+fn ensure_group_exists(ui: &SetupUi, group: &str) -> Result<()> {
+    if group_exists(group)? {
+        ui.print_info(format!("Group `{group}` already exists."));
+        return Ok(());
+    }
+
+    ui.print_info(format!(
+        "Creating dedicated `{group}` group for `/dev/uinput`..."
+    ));
+    run_sudo(&["groupadd", "--system", group])
+}
+
+fn group_exists(group: &str) -> Result<bool> {
+    let group_file = std::fs::read_to_string("/etc/group").map_err(|err| {
+        crate::error::WhsprError::Config(format!("failed to read /etc/group: {err}"))
+    })?;
+
+    Ok(group_file
+        .lines()
+        .filter_map(|line| line.split(':').next())
+        .any(|entry| entry == group))
+}
+
 fn current_user_in_group(username: &str, group: &str) -> Result<bool> {
     let output = Command::new("id")
         .args(["-nG", username])
@@ -198,48 +227,90 @@ fn current_user_in_group(username: &str, group: &str) -> Result<bool> {
 }
 
 fn current_username() -> Result<String> {
-    if let Some(name) = std::env::var_os("SUDO_USER").or_else(|| std::env::var_os("USER")) {
-        let username = name.to_string_lossy().trim().to_string();
-        if !username.is_empty() {
-            return Ok(username);
-        }
+    let uid = unsafe { libc::geteuid() };
+    if uid == 0 {
+        return Err(crate::error::WhsprError::Config(
+            "run `whispers setup` as your normal user, not as root".into(),
+        ));
     }
 
-    let output = Command::new("id").arg("-un").output().map_err(|err| {
-        crate::error::WhsprError::Config(format!("failed to determine username: {err}"))
-    })?;
-    if !output.status.success() {
+    let buffer_len = match unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) } {
+        value if value > 0 => value as usize,
+        _ => 1024,
+    };
+    let mut buffer = vec![0u8; buffer_len];
+    let mut passwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+    let mut result = std::ptr::null_mut();
+
+    let status = unsafe {
+        libc::getpwuid_r(
+            uid,
+            passwd.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() {
         return Err(crate::error::WhsprError::Config(format!(
-            "`id -un` exited with {}",
-            output.status
+            "failed to resolve current username for uid {uid}"
         )));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let passwd = unsafe { passwd.assume_init() };
+    let name = unsafe { CStr::from_ptr(passwd.pw_name) };
+    Ok(name.to_string_lossy().into_owned())
 }
 
 fn install_root_file(ui: &SetupUi, target: &str, contents: &str) -> Result<()> {
-    let temp_path = temp_file_path(target);
-    std::fs::write(&temp_path, contents)?;
-    let temp_path_str = temp_path.to_string_lossy().to_string();
-    let result = run_sudo(&["install", "-Dm644", &temp_path_str, target]);
-    let _ = std::fs::remove_file(&temp_path);
-    result?;
+    let Some(parent) = Path::new(target).parent().and_then(|path| path.to_str()) else {
+        return Err(crate::error::WhsprError::Config(format!(
+            "failed to determine parent directory for `{target}`"
+        )));
+    };
+    run_sudo(&["mkdir", "-p", parent])?;
+    run_sudo_with_input(&["tee", target], contents)?;
+    run_sudo(&["chmod", "0644", target])?;
     ui.print_info(format!("Installed `{target}`."));
     Ok(())
-}
-
-fn temp_file_path(target: &str) -> PathBuf {
-    let basename = Path::new(target)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("whispers-temp");
-    std::env::temp_dir().join(format!("whispers-{}-{basename}", std::process::id()))
 }
 
 fn run_sudo(args: &[&str]) -> Result<()> {
     let status = Command::new("sudo").args(args).status().map_err(|err| {
         crate::error::WhsprError::Config(format!("failed to run sudo {:?}: {err}", args))
+    })?;
+    if !status.success() {
+        return Err(crate::error::WhsprError::Config(format!(
+            "`sudo {}` exited with {status}",
+            args.join(" ")
+        )));
+    }
+    Ok(())
+}
+
+fn run_sudo_with_input(args: &[&str], input: &str) -> Result<()> {
+    let mut child = Command::new("sudo")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .map_err(|err| {
+            crate::error::WhsprError::Config(format!("failed to run sudo {:?}: {err}", args))
+        })?;
+
+    let mut stdin = child.stdin.take().ok_or_else(|| {
+        crate::error::WhsprError::Config(format!("failed to open stdin for sudo {:?}", args))
+    })?;
+    stdin.write_all(input.as_bytes()).map_err(|err| {
+        crate::error::WhsprError::Config(format!(
+            "failed to write stdin for sudo {:?}: {err}",
+            args
+        ))
+    })?;
+    drop(stdin);
+
+    let status = child.wait().map_err(|err| {
+        crate::error::WhsprError::Config(format!("failed to wait for sudo {:?}: {err}", args))
     })?;
     if !status.success() {
         return Err(crate::error::WhsprError::Config(format!(

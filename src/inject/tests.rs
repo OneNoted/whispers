@@ -95,6 +95,6 @@ fn readiness_report_formats_permission_guidance() {
         report
             .fix_lines()
             .iter()
-            .any(|line| line.contains("`input` group"))
+            .any(|line| line.contains("`uinput` group"))
     );
 }
