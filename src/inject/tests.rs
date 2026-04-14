@@ -1,3 +1,5 @@
+use std::os::unix::fs::PermissionsExt;
+
 use crate::error::WhsprError;
 
 use super::preflight::InjectionReadinessIssue;
@@ -111,4 +113,23 @@ fn readiness_report_only_requires_relogin_when_permission_is_last_blocker() {
         InjectionReadinessIssue::MissingWlCopy,
     ]);
     assert!(!additional_steps.only_requires_relogin());
+}
+
+#[test]
+fn probe_uinput_requires_read_and_write_access() {
+    let dir = crate::test_support::unique_temp_dir("uinput-readwrite-probe");
+    let path = dir.join("uinput");
+    std::fs::write(&path, []).expect("create probe file");
+
+    let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+    perms.set_mode(0o200);
+    std::fs::set_permissions(&path, perms).expect("set write-only permissions");
+
+    let issue = preflight::probe_uinput_path(&path).expect("write-only file should fail");
+    assert_eq!(issue, InjectionReadinessIssue::UinputPermissionDenied);
+
+    let mut cleanup_perms = std::fs::metadata(&path).expect("metadata").permissions();
+    cleanup_perms.set_mode(0o600);
+    std::fs::set_permissions(&path, cleanup_perms).expect("restore permissions");
+    std::fs::remove_dir_all(&dir).expect("cleanup temp dir");
 }

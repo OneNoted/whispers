@@ -1,4 +1,4 @@
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -260,15 +260,52 @@ fn ensure_group_exists(ui: &SetupUi, group: &str) -> Result<()> {
     run_sudo(&["groupadd", "--system", group])
 }
 
-fn group_exists(group: &str) -> Result<bool> {
-    let group_file = std::fs::read_to_string("/etc/group").map_err(|err| {
-        crate::error::WhsprError::Config(format!("failed to read /etc/group: {err}"))
+pub(super) fn group_exists(group: &str) -> Result<bool> {
+    let c_group = CString::new(group).map_err(|_| {
+        crate::error::WhsprError::Config(format!(
+            "group name `{group}` contains an interior NUL byte"
+        ))
     })?;
 
-    Ok(group_file
-        .lines()
-        .filter_map(|line| line.split(':').next())
-        .any(|entry| entry == group))
+    let mut buffer_len = match unsafe { libc::sysconf(libc::_SC_GETGR_R_SIZE_MAX) } {
+        value if value > 0 => value as usize,
+        _ => 1024,
+    };
+
+    loop {
+        let mut buffer = vec![0u8; buffer_len];
+        let mut group_entry = std::mem::MaybeUninit::<libc::group>::uninit();
+        let mut result = std::ptr::null_mut();
+
+        let status = unsafe {
+            libc::getgrnam_r(
+                c_group.as_ptr(),
+                group_entry.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+
+        if status == 0 {
+            return Ok(!result.is_null());
+        }
+
+        if status == libc::ERANGE {
+            buffer_len = buffer_len.saturating_mul(2);
+            if buffer_len > 1 << 20 {
+                return Err(crate::error::WhsprError::Config(format!(
+                    "failed to resolve group `{group}` via NSS: lookup buffer exceeded 1 MiB"
+                )));
+            }
+            continue;
+        }
+
+        return Err(crate::error::WhsprError::Config(format!(
+            "failed to resolve group `{group}` via NSS: {}",
+            std::io::Error::from_raw_os_error(status)
+        )));
+    }
 }
 
 fn current_user_in_group(username: &str, group: &str) -> Result<bool> {

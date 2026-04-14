@@ -129,7 +129,10 @@ impl InjectionReadinessIssue {
                 "Log out and back in after changing group membership.".into(),
             ],
             Self::UinputUnavailable(_) => {
-                vec!["Check that `/dev/uinput` exists and is writable by the current user.".into()]
+                vec![
+                    "Check that `/dev/uinput` exists and is readable and writable by the current user."
+                        .into(),
+                ]
             }
         }
     }
@@ -141,7 +144,7 @@ impl InjectionReadinessIssue {
                 "`/dev/uinput` is missing; load the `uinput` kernel module".into()
             }
             Self::UinputPermissionDenied => {
-                "`/dev/uinput` is present but not writable by the current user; create a dedicated `uinput` group, add your user to it, install a `udev` rule, then log out and back in".into()
+                "`/dev/uinput` is present but not readable and writable by the current user; create a dedicated `uinput` group, add your user to it, install a `udev` rule, then log out and back in".into()
             }
             Self::UinputUnavailable(detail) => {
                 format!("`/dev/uinput` could not be opened: {detail}")
@@ -159,12 +162,15 @@ pub fn validate_injection_prerequisites() -> Result<()> {
 }
 
 fn probe_uinput() -> Option<InjectionReadinessIssue> {
-    let path = Path::new(UINPUT_PATH);
+    probe_uinput_path(Path::new(UINPUT_PATH))
+}
+
+pub(super) fn probe_uinput_path(path: &Path) -> Option<InjectionReadinessIssue> {
     if !path.exists() {
         return Some(InjectionReadinessIssue::MissingUinputDevice);
     }
 
-    match OpenOptions::new().write(true).open(path) {
+    match OpenOptions::new().read(true).write(true).open(path) {
         Ok(_) => None,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
             Some(InjectionReadinessIssue::UinputPermissionDenied)
