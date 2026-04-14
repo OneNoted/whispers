@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::error::WhsprError;
+use crate::inject::{InjectionReadinessIssue, InjectionReadinessReport};
 
 use super::{CloudSetup, apply, report, side_effects};
 use crate::config::{self, TranscriptionBackend, TranscriptionFallback};
@@ -135,6 +136,24 @@ fn group_change_messages_follow_recorded_reload_status() {
 }
 
 #[test]
+fn relogin_only_readiness_collapses_to_logout_instruction() {
+    let readiness = InjectionReadinessReport::from_issues(vec![
+        InjectionReadinessIssue::UinputPermissionDenied,
+    ]);
+    let setup = side_effects::InjectionSetupOutcome {
+        changed_groups: true,
+        group_membership_ready: true,
+        udev_reload_succeeded: true,
+    };
+
+    assert_eq!(
+        report::injection_readiness_info_message(&readiness, &setup),
+        Some("Log out and back in before testing.")
+    );
+    assert!(report::injection_readiness_fix_lines(&readiness, &setup).is_empty());
+}
+
+#[test]
 fn relogin_only_completion_allows_reruns_when_group_is_already_configured() {
     let rerun = side_effects::InjectionSetupOutcome {
         changed_groups: false,
@@ -150,6 +169,39 @@ fn relogin_only_completion_allows_reruns_when_group_is_already_configured() {
     assert!(rerun.can_finish_with_relogin_only(true));
     assert!(!failed_group_update.can_finish_with_relogin_only(true));
     assert!(!rerun.can_finish_with_relogin_only(false));
+}
+
+#[test]
+fn current_username_lookup_retries_after_erange() {
+    let expected_name = std::ffi::CString::new("whispers-test-user").expect("c string");
+    let mut attempts = 0;
+
+    let username =
+        side_effects::current_username_for_uid_with(4242, |uid, passwd, _buffer, result| {
+            attempts += 1;
+            if attempts == 1 {
+                return libc::ERANGE;
+            }
+
+            unsafe {
+                *passwd = libc::passwd {
+                    pw_name: expected_name.as_ptr() as *mut _,
+                    pw_passwd: std::ptr::null_mut(),
+                    pw_uid: uid,
+                    pw_gid: 0,
+                    pw_gecos: std::ptr::null_mut(),
+                    pw_dir: std::ptr::null_mut(),
+                    pw_shell: std::ptr::null_mut(),
+                };
+                *result = passwd;
+            }
+
+            0
+        })
+        .expect("retry should succeed");
+
+    assert_eq!(username, "whispers-test-user");
+    assert_eq!(attempts, 2);
 }
 
 #[test]
