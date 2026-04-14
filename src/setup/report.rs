@@ -87,12 +87,34 @@ pub(super) fn print_injection_readiness(
         println!("  - {line}");
     }
 
-    if let Some(message) = setup.report_group_change_message() {
+    if let Some(message) = injection_readiness_info_message(readiness, setup) {
         ui.print_info(message);
     }
 
-    for line in readiness.fix_lines() {
+    for line in injection_readiness_fix_lines(readiness, setup) {
         println!("  - {line}");
+    }
+}
+
+pub(super) fn injection_readiness_info_message(
+    readiness: &InjectionReadinessReport,
+    setup: &InjectionSetupOutcome,
+) -> Option<&'static str> {
+    if setup.can_finish_with_relogin_only(readiness.only_requires_relogin()) {
+        Some("Log out and back in before testing.")
+    } else {
+        setup.report_group_change_message()
+    }
+}
+
+pub(super) fn injection_readiness_fix_lines(
+    readiness: &InjectionReadinessReport,
+    setup: &InjectionSetupOutcome,
+) -> Vec<String> {
+    if setup.can_finish_with_relogin_only(readiness.only_requires_relogin()) {
+        Vec::new()
+    } else {
+        readiness.fix_lines()
     }
 }
 
