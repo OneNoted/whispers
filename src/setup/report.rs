@@ -89,7 +89,7 @@ pub(super) fn print_injection_readiness(
 
     if setup.changed_groups {
         ui.print_info(
-            "If you were just added to the `input` group, log out and back in before testing.",
+            "If you were just added to the `uinput` group, log out and back in before testing.",
         );
     }
 

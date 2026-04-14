@@ -93,11 +93,7 @@ cargo install --git https://github.com/OneNoted/whispers --features local-rewrit
 - Rust 1.85+
 - CUDA toolkit if you enable the `cuda` feature
 
-If `/dev/uinput` is blocked, add your user to the `input` group and log back in:
-
-```sh
-sudo usermod -aG input "$USER"
-```
+If `/dev/uinput` is blocked, run `whispers setup` and let it configure the dedicated `uinput` group and `udev` rule for you.
 
 ## Quick start
 
