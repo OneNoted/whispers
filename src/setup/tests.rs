@@ -75,24 +75,34 @@ fn group_membership_success_marks_logout_as_needed() {
 
     assert!(warning.is_none());
     assert!(outcome.changed_groups);
+    assert!(!outcome.udev_reload_succeeded);
+}
+
+#[test]
+fn udev_trigger_waits_for_settle_before_rechecking() {
+    assert!(side_effects::UDEV_TRIGGER_ARGS.contains(&"--settle"));
 }
 
 #[test]
 fn setup_complete_message_stays_aligned_with_remaining_steps() {
     assert_eq!(
-        report::setup_complete_message(false, true, true),
+        report::setup_complete_message(false, true, true, true),
         "Log out and back in, then use whispers."
     );
     assert_eq!(
-        report::setup_complete_message(false, true, false),
+        report::setup_complete_message(false, true, true, false),
         "Log out and back in, then finish any remaining paste injection steps above before using whispers."
     );
     assert_eq!(
-        report::setup_complete_message(false, false, false),
+        report::setup_complete_message(false, true, false, true),
+        "Log out and back in, then finish any remaining paste injection steps above before using whispers."
+    );
+    assert_eq!(
+        report::setup_complete_message(false, false, false, false),
         "Finish the paste injection steps above, then use whispers."
     );
     assert_eq!(
-        report::setup_complete_message(true, false, false),
+        report::setup_complete_message(true, false, false, false),
         "You can now use whispers."
     );
 }

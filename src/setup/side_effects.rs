@@ -14,10 +14,18 @@ const MODULES_LOAD_PATH: &str = "/etc/modules-load.d/whispers-uinput.conf";
 const UDEV_RULE_PATH: &str = "/etc/udev/rules.d/70-whispers-uinput.rules";
 const UDEV_RULE_CONTENT: &str = "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"uinput\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"\n";
 const MODULES_LOAD_CONTENT: &str = "uinput\n";
+pub(super) const UDEV_TRIGGER_ARGS: &[&str] = &[
+    "udevadm",
+    "trigger",
+    "--subsystem-match=misc",
+    "--sysname-match=uinput",
+    "--settle",
+];
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct InjectionSetupOutcome {
     pub changed_groups: bool,
+    pub udev_reload_succeeded: bool,
 }
 
 pub(super) async fn download_asr_model(
@@ -141,10 +149,11 @@ pub(super) fn maybe_setup_injection_access(ui: &SetupUi) -> Result<InjectionSetu
     ) {
         ui.print_warn(warning);
     }
-    if let Err(err) = reload_udev(ui) {
-        ui.print_warn(format!(
+    match reload_udev(ui) {
+        Ok(()) => outcome.udev_reload_succeeded = true,
+        Err(err) => ui.print_warn(format!(
             "Failed to reload `udev` after updating `/dev/uinput`: {err}"
-        ));
+        )),
     }
 
     if outcome.changed_groups {
@@ -185,12 +194,7 @@ fn ensure_uinput_module_loaded(ui: &SetupUi) -> Result<()> {
 fn reload_udev(ui: &SetupUi) -> Result<()> {
     ui.print_info("Reloading `udev` rules for `/dev/uinput`...");
     run_sudo(&["udevadm", "control", "--reload"])?;
-    run_sudo(&[
-        "udevadm",
-        "trigger",
-        "--subsystem-match=misc",
-        "--sysname-match=uinput",
-    ])
+    run_sudo(UDEV_TRIGGER_ARGS)
 }
 
 fn add_user_to_group(ui: &SetupUi, group: &str) -> Result<bool> {
