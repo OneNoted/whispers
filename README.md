@@ -15,14 +15,14 @@
   ·
   <a href="#quick-start"><strong>Quick start</strong></a>
   ·
-  <a href="#commands"><strong>Commands</strong></a>
+  <a href="#docs"><strong>Docs</strong></a>
   ·
   <a href="#troubleshooting"><strong>Troubleshooting</strong></a>
   ·
   <a href="#releases"><strong>Releases</strong></a>
 </p>
 
-`whispers` keeps the default dictation path local, with optional cloud ASR and rewrite backends when you want them. The normal loop is simple: start recording with a keybinding, stop recording, and paste the transcript directly into the focused app.
+`whispers` keeps the default dictation path local, with optional cloud ASR and rewrite backends when you want them. The normal loop is simple: bind `whispers` to a key, press once to start recording, press again to stop, transcribe, and paste into the focused Wayland app.
 
 ## What it does
 
@@ -34,66 +34,22 @@
 
 ## Install
 
+For the full package matrix, prerequisites, and post-install notes, see [docs/install.md](docs/install.md).
+
 ### Arch Linux (`paru`)
 
-#### CUDA-enabled
-
 ```sh
-# prebuilt GitHub release bundle with CUDA support
-paru -S whispers-cuda-bin
-
-# latest main branch build with CUDA support
-paru -S whispers-cuda-git
-```
-
-Use these when you want the CUDA-enabled local path from the AUR.
-
-#### Portable / non-CUDA
-
-```sh
-# prebuilt GitHub release bundle
 paru -S whispers-bin
-
-# latest main branch build
-paru -S whispers-git
+# or: whispers-git / whispers-cuda-bin / whispers-cuda-git
 ```
-
-- `whispers-cuda-bin` installs the published Linux x86_64 CUDA bundle.
-- `whispers-cuda-git` builds the latest `main` branch with `cuda,local-rewrite,osd`.
-- `whispers-bin` installs the published portable non-CUDA Linux x86_64 bundle.
-- `whispers-git` builds the latest `main` branch with the portable `local-rewrite,osd` feature set.
 
 ### Cargo
 
 ```sh
-# crates.io with the default OSD-enabled install
 cargo install whispers
-
-# add local rewrite support
-cargo install whispers --features local-rewrite
-
-# add CUDA + local rewrite
-cargo install whispers --features cuda,local-rewrite
-
-# no OSD
-cargo install whispers --no-default-features
 ```
 
-If you want the latest GitHub version instead of crates.io:
-
-```sh
-cargo install --git https://github.com/OneNoted/whispers --features local-rewrite
-```
-
-## Requirements
-
-- Linux with Wayland
-- `wl-copy`
-- access to `/dev/uinput`
-- Rust 1.85+
-- CUDA toolkit if you enable the `cuda` feature
-
-If `/dev/uinput` is blocked, run `whispers setup` and let it configure the dedicated `uinput` group and `udev` rule for you.
+`cargo install whispers` follows crates.io releases. The AUR `*-bin` packages follow published GitHub release bundles, and `*-git` packages track the repository `main` branch. If you need rewrite or CUDA features, or want install details before choosing a package, use [docs/install.md](docs/install.md).
 
 ## Quick start
 
@@ -101,7 +57,7 @@ If `/dev/uinput` is blocked, run `whispers setup` and let it configure the dedic
 # generate config and download a model
 whispers setup
 
-# one-shot dictation
+# start dictation (run again to stop, transcribe, and paste)
 whispers
 ```
 
@@ -111,11 +67,7 @@ Default config path:
 ~/.config/whispers/config.toml
 ```
 
-Canonical example config:
-
-- [config.example.toml](config.example.toml)
-
-### Keybinding
+Example compositor bindings:
 
 Hyprland:
 
@@ -129,70 +81,26 @@ Sway:
 bindsym $mod+Alt+d exec whispers
 ```
 
-## Commands
+## Docs
 
-```sh
-# setup
-whispers setup
-
-# one-shot dictation
-whispers
-whispers transcribe audio.wav
-
-# ASR models
-whispers asr-model list
-whispers asr-model download large-v3-turbo
-whispers asr-model select large-v3-turbo
-
-# rewrite models
-whispers rewrite-model list
-whispers rewrite-model download qwen-3.5-4b-q4_k_m
-whispers rewrite-model select qwen-3.5-4b-q4_k_m
-
-# personalization
-whispers dictionary add "wisper flow" "Wispr Flow"
-whispers snippets add signature "Best regards,\nNotes"
-
-# cloud
-whispers cloud check
-
-# shell completions
-whispers completions zsh
-```
-
-## Notes
-
-- Local ASR is the default path.
-- Local rewrite is enabled when you install with `--features local-rewrite` or use the current AUR packages.
-- `whispers` installs the helper rewrite worker for you when that feature is enabled.
-- Shell completions are printed to `stdout`.
+- [Installation guide](docs/install.md) — package choices, prerequisites, config path, and feature notes.
+- [CLI guide](docs/cli.md) — command groups, examples, and newer rewrite-policy commands.
+- [Troubleshooting](docs/troubleshooting.md) — `wl-copy`, `/dev/uinput`, cloud checks, and hang diagnostics.
+- [config.example.toml](config.example.toml) — the canonical config template.
 
 ## Troubleshooting
 
-If the main `whispers` process ever gets stuck after playback when using local `whisper_cpp`, enable the built-in hang diagnostics for the next repro:
+If `/dev/uinput` is blocked, run `whispers setup` and let it configure the dedicated `uinput` group and `udev` rule for you. If the main dictation process hangs around local `whisper_cpp` transcription, enable hang diagnostics for the next repro:
 
 ```sh
 WHISPERS_HANG_DEBUG=1 whispers
 ```
 
-When that mode is enabled, `whispers` writes runtime status and hang bundles under `${XDG_RUNTIME_DIR:-/tmp}/whispers/`:
-
-- `main-status.json` shows the current dictation stage and recent stage metadata.
-- `hang-<pid>-<stage>-<timestamp>.log` is emitted if `whisper_cpp` spends too long in model load or transcription.
-
-Those bundles include the current status snapshot plus best-effort stack and open-file diagnostics. If the hang reproduces, capture the newest `hang-*.log` file along with `main-status.json`.
+For the full troubleshooting guide, including the emitted `main-status.json` and `hang-*.log` files, see [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Releases
 
-Tagged releases publish a Linux x86_64 bundle with:
-
-- a portable `whispers-<version>-x86_64-unknown-linux-gnu.tar.gz`
-- a CUDA-enabled `whispers-cuda-<version>-x86_64-unknown-linux-gnu.tar.gz`
-- `whispers`, `whispers-osd`, and `whispers-rewrite-worker`
-- Bash, Zsh, and Fish completions
-- `README.md`, `config.example.toml`, `LICENSE`, and `NOTICE`
-
-Those bundles are what the `whispers-bin` and `whispers-cuda-bin` AUR packages install.
+Tagged releases publish portable and CUDA-enabled Linux x86_64 bundles. The AUR `whispers-bin` and `whispers-cuda-bin` packages install those published release artifacts.
 
 ## License
 
