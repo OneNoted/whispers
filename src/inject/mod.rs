@@ -6,6 +6,8 @@ mod preflight;
 mod tests;
 
 use crate::error::{Result, WhsprError};
+#[cfg(test)]
+pub(crate) use preflight::InjectionReadinessIssue;
 pub use preflight::{InjectionReadinessReport, validate_injection_prerequisites};
 
 const DEVICE_READY_DELAY: std::time::Duration = std::time::Duration::from_millis(120);

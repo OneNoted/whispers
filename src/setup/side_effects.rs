@@ -333,32 +333,59 @@ fn current_username() -> Result<String> {
         ));
     }
 
-    let buffer_len = match unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) } {
+    current_username_for_uid_with(uid, |uid, passwd, buffer, result| unsafe {
+        libc::getpwuid_r(
+            uid,
+            passwd,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            result,
+        )
+    })
+}
+
+pub(super) fn current_username_for_uid_with<F>(uid: libc::uid_t, mut lookup: F) -> Result<String>
+where
+    F: FnMut(libc::uid_t, *mut libc::passwd, &mut Vec<u8>, *mut *mut libc::passwd) -> libc::c_int,
+{
+    let mut buffer_len = match unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) } {
         value if value > 0 => value as usize,
         _ => 1024,
     };
-    let mut buffer = vec![0u8; buffer_len];
-    let mut passwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
-    let mut result = std::ptr::null_mut();
 
-    let status = unsafe {
-        libc::getpwuid_r(
-            uid,
-            passwd.as_mut_ptr(),
-            buffer.as_mut_ptr().cast(),
-            buffer.len(),
-            &mut result,
-        )
-    };
-    if status != 0 || result.is_null() {
+    loop {
+        let mut buffer = vec![0u8; buffer_len];
+        let mut passwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut result = std::ptr::null_mut();
+
+        let status = lookup(uid, passwd.as_mut_ptr(), &mut buffer, &mut result);
+        if status == 0 && !result.is_null() {
+            let passwd = unsafe { passwd.assume_init() };
+            let name = unsafe { CStr::from_ptr(passwd.pw_name) };
+            return Ok(name.to_string_lossy().into_owned());
+        }
+
+        if status == libc::ERANGE {
+            buffer_len = buffer_len.saturating_mul(2);
+            if buffer_len > 1 << 20 {
+                return Err(crate::error::WhsprError::Config(format!(
+                    "failed to resolve current username for uid {uid}: lookup buffer exceeded 1 MiB"
+                )));
+            }
+            continue;
+        }
+
+        if status == 0 {
+            return Err(crate::error::WhsprError::Config(format!(
+                "failed to resolve current username for uid {uid}"
+            )));
+        }
+
         return Err(crate::error::WhsprError::Config(format!(
-            "failed to resolve current username for uid {uid}"
+            "failed to resolve current username for uid {uid}: {}",
+            std::io::Error::from_raw_os_error(status)
         )));
     }
-
-    let passwd = unsafe { passwd.assume_init() };
-    let name = unsafe { CStr::from_ptr(passwd.pw_name) };
-    Ok(name.to_string_lossy().into_owned())
 }
 
 fn install_root_file(ui: &SetupUi, target: &str, contents: &str) -> Result<()> {
