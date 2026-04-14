@@ -104,14 +104,31 @@ pub(super) fn print_setup_complete(
     setup: &InjectionSetupOutcome,
 ) {
     ui.print_header("Setup complete");
-    if readiness.is_ready() {
-        println!("You can now use whispers.");
-    } else if setup.changed_groups {
-        println!("Log out and back in, then use whispers.");
-    } else {
-        println!("Finish the paste injection steps above, then use whispers.");
-    }
+    println!(
+        "{}",
+        setup_complete_message(
+            readiness.is_ready(),
+            setup.changed_groups,
+            readiness.only_requires_relogin(),
+        )
+    );
     ui.print_section("Example keybind");
     ui.print_subtle("Bind it to a key in your compositor, e.g. for Hyprland:");
     println!("  bind = SUPER ALT, D, exec, whispers");
+}
+
+pub(super) fn setup_complete_message(
+    is_ready: bool,
+    changed_groups: bool,
+    only_requires_relogin: bool,
+) -> &'static str {
+    if is_ready {
+        "You can now use whispers."
+    } else if changed_groups && only_requires_relogin {
+        "Log out and back in, then use whispers."
+    } else if changed_groups {
+        "Log out and back in, then finish any remaining paste injection steps above before using whispers."
+    } else {
+        "Finish the paste injection steps above, then use whispers."
+    }
 }

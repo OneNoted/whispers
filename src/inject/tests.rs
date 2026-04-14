@@ -98,3 +98,17 @@ fn readiness_report_formats_permission_guidance() {
             .any(|line| line.contains("`uinput` group"))
     );
 }
+
+#[test]
+fn readiness_report_only_requires_relogin_when_permission_is_last_blocker() {
+    let relogin_only = InjectionReadinessReport::from_issues(vec![
+        InjectionReadinessIssue::UinputPermissionDenied,
+    ]);
+    assert!(relogin_only.only_requires_relogin());
+
+    let additional_steps = InjectionReadinessReport::from_issues(vec![
+        InjectionReadinessIssue::UinputPermissionDenied,
+        InjectionReadinessIssue::MissingWlCopy,
+    ]);
+    assert!(!additional_steps.only_requires_relogin());
+}
