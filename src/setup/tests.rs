@@ -79,6 +79,39 @@ fn group_membership_success_marks_logout_as_needed() {
 }
 
 #[test]
+fn group_change_messages_follow_recorded_reload_status() {
+    let success = side_effects::InjectionSetupOutcome {
+        changed_groups: true,
+        udev_reload_succeeded: true,
+    };
+    let failed_reload = side_effects::InjectionSetupOutcome {
+        changed_groups: true,
+        udev_reload_succeeded: false,
+    };
+
+    assert_eq!(
+        success.setup_group_change_message(),
+        Some("Group membership changed. Log out and back in before testing dictation."),
+    );
+    assert_eq!(
+        failed_reload.setup_group_change_message(),
+        Some(
+            "Group membership changed. Log out and back in after finishing the remaining paste injection steps.",
+        ),
+    );
+    assert_eq!(
+        success.report_group_change_message(),
+        Some("If you were just added to the `uinput` group, log out and back in before testing."),
+    );
+    assert_eq!(
+        failed_reload.report_group_change_message(),
+        Some(
+            "If you were just added to the `uinput` group, log out and back in after finishing the remaining paste injection steps.",
+        ),
+    );
+}
+
+#[test]
 fn udev_trigger_waits_for_settle_before_rechecking() {
     assert!(side_effects::UDEV_TRIGGER_ARGS.contains(&"--settle"));
 }
@@ -86,23 +119,23 @@ fn udev_trigger_waits_for_settle_before_rechecking() {
 #[test]
 fn setup_complete_message_stays_aligned_with_remaining_steps() {
     assert_eq!(
-        report::setup_complete_message(false, true, true, true),
+        report::setup_complete_message(false, true, true),
         "Log out and back in, then use whispers."
     );
     assert_eq!(
-        report::setup_complete_message(false, true, true, false),
+        report::setup_complete_message(false, true, false),
         "Log out and back in, then finish any remaining paste injection steps above before using whispers."
     );
     assert_eq!(
-        report::setup_complete_message(false, true, false, true),
+        report::setup_complete_message(false, true, false),
         "Log out and back in, then finish any remaining paste injection steps above before using whispers."
     );
     assert_eq!(
-        report::setup_complete_message(false, false, false, false),
+        report::setup_complete_message(false, false, false),
         "Finish the paste injection steps above, then use whispers."
     );
     assert_eq!(
-        report::setup_complete_message(true, false, false, false),
+        report::setup_complete_message(true, false, false),
         "You can now use whispers."
     );
 }
