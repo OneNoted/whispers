@@ -1,6 +1,7 @@
 use crate::config::Config;
+use crate::error::WhsprError;
 
-use super::{CloudSetup, apply};
+use super::{CloudSetup, apply, report, side_effects};
 use crate::config::{self, TranscriptionBackend, TranscriptionFallback};
 
 #[cfg(not(feature = "local-rewrite"))]
@@ -49,4 +50,49 @@ fn runtime_selection_disables_local_rewrite_fallback_when_build_lacks_local_rewr
     let config = Config::load(Some(&config_path)).expect("load config");
     assert_eq!(config.rewrite.backend, RewriteBackend::Cloud);
     assert_eq!(config.rewrite.fallback, RewriteFallback::None);
+}
+
+#[test]
+fn group_membership_failures_become_warnings_without_marking_success() {
+    let mut outcome = side_effects::InjectionSetupOutcome::default();
+    let warning = side_effects::record_group_membership_change_result(
+        &mut outcome,
+        "uinput",
+        Err(WhsprError::Config("group add failed".into())),
+    )
+    .expect("errors should become warnings");
+
+    assert!(!outcome.changed_groups);
+    assert!(warning.contains("Failed to add the current user"));
+    assert!(warning.contains("group add failed"));
+}
+
+#[test]
+fn group_membership_success_marks_logout_as_needed() {
+    let mut outcome = side_effects::InjectionSetupOutcome::default();
+    let warning =
+        side_effects::record_group_membership_change_result(&mut outcome, "uinput", Ok(true));
+
+    assert!(warning.is_none());
+    assert!(outcome.changed_groups);
+}
+
+#[test]
+fn setup_complete_message_stays_aligned_with_remaining_steps() {
+    assert_eq!(
+        report::setup_complete_message(false, true, true),
+        "Log out and back in, then use whispers."
+    );
+    assert_eq!(
+        report::setup_complete_message(false, true, false),
+        "Log out and back in, then finish any remaining paste injection steps above before using whispers."
+    );
+    assert_eq!(
+        report::setup_complete_message(false, false, false),
+        "Finish the paste injection steps above, then use whispers."
+    );
+    assert_eq!(
+        report::setup_complete_message(true, false, false),
+        "You can now use whispers."
+    );
 }

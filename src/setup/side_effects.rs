@@ -134,8 +134,12 @@ pub(super) fn maybe_setup_injection_access(ui: &SetupUi) -> Result<InjectionSetu
             "Failed to ensure the `{UINPUT_GROUP}` group exists: {err}"
         ));
     }
-    if add_user_to_group(ui, UINPUT_GROUP)? {
-        outcome.changed_groups = true;
+    if let Some(warning) = record_group_membership_change_result(
+        &mut outcome,
+        UINPUT_GROUP,
+        add_user_to_group(ui, UINPUT_GROUP),
+    ) {
+        ui.print_warn(warning);
     }
     if let Err(err) = reload_udev(ui) {
         ui.print_warn(format!(
@@ -148,6 +152,23 @@ pub(super) fn maybe_setup_injection_access(ui: &SetupUi) -> Result<InjectionSetu
     }
 
     Ok(outcome)
+}
+
+pub(super) fn record_group_membership_change_result(
+    outcome: &mut InjectionSetupOutcome,
+    group: &str,
+    result: Result<bool>,
+) -> Option<String> {
+    match result {
+        Ok(true) => {
+            outcome.changed_groups = true;
+            None
+        }
+        Ok(false) => None,
+        Err(err) => Some(format!(
+            "Failed to add the current user to the `{group}` group: {err}"
+        )),
+    }
 }
 
 fn asr_model_prewarm(config: &config::Config) -> Result<()> {

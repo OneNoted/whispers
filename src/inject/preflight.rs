@@ -51,6 +51,13 @@ impl InjectionReadinessReport {
         })
     }
 
+    pub(crate) fn only_requires_relogin(&self) -> bool {
+        matches!(
+            self.issues.as_slice(),
+            [InjectionReadinessIssue::UinputPermissionDenied]
+        )
+    }
+
     pub fn issue_lines(&self) -> Vec<String> {
         self.issues
             .iter()
