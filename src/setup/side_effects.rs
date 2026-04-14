@@ -28,6 +28,38 @@ pub(super) struct InjectionSetupOutcome {
     pub udev_reload_succeeded: bool,
 }
 
+impl InjectionSetupOutcome {
+    pub(super) fn setup_group_change_message(self) -> Option<&'static str> {
+        if !self.changed_groups {
+            None
+        } else if self.udev_reload_succeeded {
+            Some("Group membership changed. Log out and back in before testing dictation.")
+        } else {
+            Some(
+                "Group membership changed. Log out and back in after finishing the remaining paste injection steps.",
+            )
+        }
+    }
+
+    pub(super) fn report_group_change_message(self) -> Option<&'static str> {
+        if !self.changed_groups {
+            None
+        } else if self.udev_reload_succeeded {
+            Some(
+                "If you were just added to the `uinput` group, log out and back in before testing.",
+            )
+        } else {
+            Some(
+                "If you were just added to the `uinput` group, log out and back in after finishing the remaining paste injection steps.",
+            )
+        }
+    }
+
+    pub(super) fn can_finish_with_relogin_only(self, only_requires_relogin: bool) -> bool {
+        self.changed_groups && self.udev_reload_succeeded && only_requires_relogin
+    }
+}
+
 pub(super) async fn download_asr_model(
     ui: &SetupUi,
     asr_model: &'static crate::asr_model::AsrModelInfo,
@@ -156,8 +188,8 @@ pub(super) fn maybe_setup_injection_access(ui: &SetupUi) -> Result<InjectionSetu
         )),
     }
 
-    if outcome.changed_groups {
-        ui.print_info("Group membership changed. Log out and back in before testing dictation.");
+    if let Some(message) = outcome.setup_group_change_message() {
+        ui.print_info(message);
     }
 
     Ok(outcome)
