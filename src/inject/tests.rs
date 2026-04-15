@@ -21,7 +21,7 @@ fn run_wl_copy_reports_spawn_failure() {
 fn run_wl_copy_reports_non_zero_exit() {
     let err = clipboard::run_wl_copy(
         "/bin/sh",
-        &[String::from("-c"), String::from("exit 7")],
+        &[String::from("-c"), String::from("cat >/dev/null; exit 7")],
         "hello",
     )
     .expect_err("non-zero exit should fail");
