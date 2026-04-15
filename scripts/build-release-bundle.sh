@@ -72,6 +72,8 @@ install -Dm644 docs/cli.md \
   "$stage_dir/$bundle_name/share/doc/whispers/docs/cli.md"
 install -Dm644 docs/troubleshooting.md \
   "$stage_dir/$bundle_name/share/doc/whispers/docs/troubleshooting.md"
+install -Dm644 docs/contributing.md \
+  "$stage_dir/$bundle_name/share/doc/whispers/docs/contributing.md"
 install -Dm644 config.example.toml \
   "$stage_dir/$bundle_name/share/doc/whispers/config.example.toml"
 install -Dm644 LICENSE \
