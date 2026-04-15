@@ -46,15 +46,23 @@ pub(super) fn run_wl_copy_with_timeout(
         .spawn()
         .map_err(|e| WhsprError::Injection(format!("failed to spawn wl-copy: {e}")))?;
 
+    let mut saw_broken_pipe = false;
     {
         use std::io::Write;
         let mut stdin = wl_copy
             .stdin
             .take()
             .ok_or_else(|| WhsprError::Injection("wl-copy stdin unavailable".into()))?;
-        stdin
-            .write_all(text.as_bytes())
-            .map_err(|e| WhsprError::Injection(format!("wl-copy stdin write: {e}")))?;
+        if let Err(err) = stdin.write_all(text.as_bytes()) {
+            if err.kind() == std::io::ErrorKind::BrokenPipe {
+                saw_broken_pipe = true;
+            } else {
+                return Err(WhsprError::Injection(format!(
+                    "wl-copy stdin write: {e}",
+                    e = err
+                )));
+            }
+        }
     }
 
     let deadline = std::time::Instant::now() + timeout;
@@ -79,6 +87,11 @@ pub(super) fn run_wl_copy_with_timeout(
         return Err(WhsprError::Injection(format!(
             "wl-copy exited with {status}"
         )));
+    }
+    if saw_broken_pipe {
+        return Err(WhsprError::Injection(
+            "wl-copy closed stdin before consuming the clipboard payload".into(),
+        ));
     }
     Ok(())
 }
