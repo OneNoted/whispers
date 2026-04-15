@@ -16,6 +16,7 @@ include = [
     "docs/install.md",
     "docs/cli.md",
     "docs/troubleshooting.md",
+    "docs/contributing.md",
     "LICENSE",
     "NOTICE",
     "config.example.toml",

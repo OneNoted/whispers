@@ -86,6 +86,7 @@ bindsym $mod+Alt+d exec whispers
 - [Installation guide](docs/install.md) — package choices, prerequisites, config path, and feature notes.
 - [CLI guide](docs/cli.md) — command groups, examples, and newer rewrite-policy commands.
 - [Troubleshooting](docs/troubleshooting.md) — `wl-copy`, `/dev/uinput`, cloud checks, and hang diagnostics.
+- [Contributor workflow](docs/contributing.md) — install the local pre-push hook and mirror CI before opening a PR.
 - [config.example.toml](config.example.toml) — the canonical config template.
 
 ## Troubleshooting
