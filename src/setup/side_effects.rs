@@ -143,6 +143,7 @@ pub(super) fn maybe_prewarm_experimental_nemo(
 }
 
 pub(super) fn maybe_setup_injection_access(ui: &SetupUi) -> Result<InjectionSetupOutcome> {
+    validate_setup_user(unsafe { libc::geteuid() })?;
     let readiness = crate::inject::InjectionReadinessReport::collect();
     if readiness.is_ready() || !readiness.has_uinput_issue() {
         return Ok(InjectionSetupOutcome::default());
@@ -339,11 +340,7 @@ fn current_user_in_group(username: &str, group: &str) -> Result<bool> {
 
 fn current_username() -> Result<String> {
     let uid = unsafe { libc::geteuid() };
-    if uid == 0 {
-        return Err(crate::error::WhsprError::Config(
-            "run `whispers setup` as your normal user, not as root".into(),
-        ));
-    }
+    validate_setup_user(uid)?;
 
     current_username_for_uid_with(uid, |uid, passwd, buffer, result| unsafe {
         libc::getpwuid_r(
@@ -354,6 +351,16 @@ fn current_username() -> Result<String> {
             result,
         )
     })
+}
+
+pub(super) fn validate_setup_user(uid: libc::uid_t) -> Result<()> {
+    if uid == 0 {
+        return Err(crate::error::WhsprError::Config(
+            "run `whispers setup` as your normal user, not as root".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 pub(super) fn current_username_for_uid_with<F>(uid: libc::uid_t, mut lookup: F) -> Result<String>
