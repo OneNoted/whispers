@@ -26,6 +26,7 @@ pub(super) const UDEV_TRIGGER_ARGS: &[&str] = &[
 pub(super) struct InjectionSetupOutcome {
     pub changed_groups: bool,
     pub group_membership_ready: bool,
+    pub uinput_rule_ready: bool,
     pub udev_reload_succeeded: bool,
 }
 
@@ -45,10 +46,6 @@ impl InjectionSetupOutcome {
     pub(super) fn report_group_change_message(self) -> Option<&'static str> {
         if !self.changed_groups {
             None
-        } else if self.udev_reload_succeeded {
-            Some(
-                "If you were just added to the `uinput` group, log out and back in before testing.",
-            )
         } else {
             Some(
                 "If you were just added to the `uinput` group, log out and back in after finishing the remaining paste injection steps.",
@@ -57,7 +54,11 @@ impl InjectionSetupOutcome {
     }
 
     pub(super) fn can_finish_with_relogin_only(self, only_requires_relogin: bool) -> bool {
-        self.group_membership_ready && self.udev_reload_succeeded && only_requires_relogin
+        self.should_reload_udev() && self.udev_reload_succeeded && only_requires_relogin
+    }
+
+    pub(super) fn should_reload_udev(self) -> bool {
+        self.group_membership_ready && self.uinput_rule_ready
     }
 }
 
@@ -165,10 +166,11 @@ pub(super) fn maybe_setup_injection_access(ui: &SetupUi) -> Result<InjectionSetu
     if let Err(err) = install_root_file(ui, MODULES_LOAD_PATH, MODULES_LOAD_CONTENT) {
         ui.print_warn(format!("Failed to persist the `uinput` module load: {err}"));
     }
-    if let Err(err) = install_root_file(ui, UDEV_RULE_PATH, UDEV_RULE_CONTENT) {
-        ui.print_warn(format!(
+    match install_root_file(ui, UDEV_RULE_PATH, UDEV_RULE_CONTENT) {
+        Ok(()) => outcome.uinput_rule_ready = true,
+        Err(err) => ui.print_warn(format!(
             "Failed to install the `/dev/uinput` udev rule: {err}"
-        ));
+        )),
     }
     if let Err(err) = ensure_group_exists(ui, UINPUT_GROUP) {
         ui.print_warn(format!(
@@ -182,11 +184,21 @@ pub(super) fn maybe_setup_injection_access(ui: &SetupUi) -> Result<InjectionSetu
     ) {
         ui.print_warn(warning);
     }
-    match reload_udev(ui) {
-        Ok(()) => outcome.udev_reload_succeeded = true,
-        Err(err) => ui.print_warn(format!(
-            "Failed to reload `udev` after updating `/dev/uinput`: {err}"
-        )),
+    if outcome.should_reload_udev() {
+        match reload_udev(ui) {
+            Ok(()) => outcome.udev_reload_succeeded = true,
+            Err(err) => ui.print_warn(format!(
+                "Failed to reload `udev` after updating `/dev/uinput`: {err}"
+            )),
+        }
+    } else if !outcome.group_membership_ready {
+        ui.print_warn(
+            "Skipping `/dev/uinput` rule activation until `uinput` group membership is in place.",
+        );
+    } else if !outcome.uinput_rule_ready {
+        ui.print_warn(
+            "Skipping `/dev/uinput` rule activation until the `uinput` udev rule is installed.",
+        );
     }
 
     if let Some(message) = outcome.setup_group_change_message() {
@@ -389,6 +401,11 @@ where
 }
 
 fn install_root_file(ui: &SetupUi, target: &str, contents: &str) -> Result<()> {
+    if root_file_has_contents(Path::new(target), contents) {
+        ui.print_info(format!("`{target}` already has the expected contents."));
+        return Ok(());
+    }
+
     let Some(parent) = Path::new(target).parent().and_then(|path| path.to_str()) else {
         return Err(crate::error::WhsprError::Config(format!(
             "failed to determine parent directory for `{target}`"
@@ -399,6 +416,21 @@ fn install_root_file(ui: &SetupUi, target: &str, contents: &str) -> Result<()> {
     run_sudo(&["chmod", "0644", target])?;
     ui.print_info(format!("Installed `{target}`."));
     Ok(())
+}
+
+fn root_file_has_contents(path: &Path, expected: &str) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => contents == expected,
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            false
+        }
+        Err(_) => false,
+    }
 }
 
 fn run_sudo(args: &[&str]) -> Result<()> {

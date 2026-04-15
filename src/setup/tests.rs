@@ -65,6 +65,7 @@ fn group_membership_failures_become_warnings_without_marking_success() {
 
     assert!(!outcome.changed_groups);
     assert!(!outcome.group_membership_ready);
+    assert!(!outcome.uinput_rule_ready);
     assert!(warning.contains("Failed to add the current user"));
     assert!(warning.contains("group add failed"));
 }
@@ -78,6 +79,7 @@ fn group_membership_success_marks_logout_as_needed() {
     assert!(warning.is_none());
     assert!(outcome.changed_groups);
     assert!(outcome.group_membership_ready);
+    assert!(!outcome.uinput_rule_ready);
     assert!(!outcome.udev_reload_succeeded);
 }
 
@@ -98,6 +100,7 @@ fn existing_group_membership_marks_relogin_as_possible_without_new_group_change(
     assert!(warning.is_none());
     assert!(!outcome.changed_groups);
     assert!(outcome.group_membership_ready);
+    assert!(!outcome.uinput_rule_ready);
 }
 
 #[test]
@@ -105,11 +108,13 @@ fn group_change_messages_follow_recorded_reload_status() {
     let success = side_effects::InjectionSetupOutcome {
         changed_groups: true,
         group_membership_ready: true,
+        uinput_rule_ready: true,
         udev_reload_succeeded: true,
     };
     let failed_reload = side_effects::InjectionSetupOutcome {
         changed_groups: true,
         group_membership_ready: true,
+        uinput_rule_ready: true,
         udev_reload_succeeded: false,
     };
 
@@ -125,7 +130,9 @@ fn group_change_messages_follow_recorded_reload_status() {
     );
     assert_eq!(
         success.report_group_change_message(),
-        Some("If you were just added to the `uinput` group, log out and back in before testing."),
+        Some(
+            "If you were just added to the `uinput` group, log out and back in after finishing the remaining paste injection steps.",
+        ),
     );
     assert_eq!(
         failed_reload.report_group_change_message(),
@@ -143,6 +150,7 @@ fn relogin_only_readiness_collapses_to_logout_instruction() {
     let setup = side_effects::InjectionSetupOutcome {
         changed_groups: true,
         group_membership_ready: true,
+        uinput_rule_ready: true,
         udev_reload_succeeded: true,
     };
 
@@ -158,17 +166,73 @@ fn relogin_only_completion_allows_reruns_when_group_is_already_configured() {
     let rerun = side_effects::InjectionSetupOutcome {
         changed_groups: false,
         group_membership_ready: true,
+        uinput_rule_ready: true,
         udev_reload_succeeded: true,
     };
     let failed_group_update = side_effects::InjectionSetupOutcome {
         changed_groups: false,
         group_membership_ready: false,
+        uinput_rule_ready: true,
+        udev_reload_succeeded: true,
+    };
+    let missing_rule = side_effects::InjectionSetupOutcome {
+        changed_groups: false,
+        group_membership_ready: true,
+        uinput_rule_ready: false,
         udev_reload_succeeded: true,
     };
 
     assert!(rerun.can_finish_with_relogin_only(true));
     assert!(!failed_group_update.can_finish_with_relogin_only(true));
+    assert!(!missing_rule.can_finish_with_relogin_only(true));
     assert!(!rerun.can_finish_with_relogin_only(false));
+}
+
+#[test]
+fn udev_reload_requires_group_membership_and_rule() {
+    let ready = side_effects::InjectionSetupOutcome {
+        changed_groups: false,
+        group_membership_ready: true,
+        uinput_rule_ready: true,
+        udev_reload_succeeded: false,
+    };
+    let missing_group = side_effects::InjectionSetupOutcome {
+        changed_groups: false,
+        group_membership_ready: false,
+        uinput_rule_ready: true,
+        udev_reload_succeeded: false,
+    };
+    let missing_rule = side_effects::InjectionSetupOutcome {
+        changed_groups: false,
+        group_membership_ready: true,
+        uinput_rule_ready: false,
+        udev_reload_succeeded: false,
+    };
+
+    assert!(ready.should_reload_udev());
+    assert!(!missing_group.should_reload_udev());
+    assert!(!missing_rule.should_reload_udev());
+}
+
+#[test]
+fn incomplete_setup_keeps_manual_fix_lines_visible() {
+    let readiness = InjectionReadinessReport::from_issues(vec![
+        InjectionReadinessIssue::UinputPermissionDenied,
+    ]);
+    let setup = side_effects::InjectionSetupOutcome {
+        changed_groups: true,
+        group_membership_ready: true,
+        uinput_rule_ready: false,
+        udev_reload_succeeded: true,
+    };
+
+    assert_eq!(
+        report::injection_readiness_info_message(&readiness, &setup),
+        Some(
+            "If you were just added to the `uinput` group, log out and back in after finishing the remaining paste injection steps.",
+        )
+    );
+    assert!(!report::injection_readiness_fix_lines(&readiness, &setup).is_empty());
 }
 
 #[test]
