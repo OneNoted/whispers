@@ -82,6 +82,17 @@ fn setup_rejects_root_before_uinput_readiness_short_circuit() {
 }
 
 #[test]
+fn setup_rejects_root_before_any_setup_side_effects() {
+    let err = super::validate_setup_invoker(0).expect_err("root should be rejected up front");
+    match err {
+        WhsprError::Config(message) => {
+            assert!(message.contains("run `whispers setup` as your normal user, not as root"));
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+}
+
+#[test]
 fn group_membership_success_marks_logout_as_needed() {
     let mut outcome = side_effects::InjectionSetupOutcome::default();
     let warning =
