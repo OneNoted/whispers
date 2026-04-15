@@ -54,7 +54,13 @@ impl CloudSetup {
     }
 }
 
+fn validate_setup_invoker(uid: libc::uid_t) -> Result<()> {
+    side_effects::validate_setup_user(uid)
+}
+
 pub async fn run_setup(config_path_override: Option<&Path>) -> Result<()> {
+    validate_setup_invoker(unsafe { libc::geteuid() })?;
+
     let ui = SetupUi::new();
     ui.print_header("whispers setup");
     ui.blank();
