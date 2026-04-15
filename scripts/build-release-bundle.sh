@@ -46,6 +46,7 @@ mkdir -p \
   "$stage_dir/$bundle_name/share/bash-completion/completions" \
   "$stage_dir/$bundle_name/share/zsh/site-functions" \
   "$stage_dir/$bundle_name/share/fish/vendor_completions.d" \
+  "$stage_dir/$bundle_name/share/doc/whispers/docs" \
   "$stage_dir/$bundle_name/share/doc/whispers" \
   "$stage_dir/$bundle_name/share/licenses/whispers"
 
@@ -65,6 +66,12 @@ install -Dm755 "${target_dir}/whispers-rewrite-worker" \
 
 install -Dm644 README.md \
   "$stage_dir/$bundle_name/share/doc/whispers/README.md"
+install -Dm644 docs/install.md \
+  "$stage_dir/$bundle_name/share/doc/whispers/docs/install.md"
+install -Dm644 docs/cli.md \
+  "$stage_dir/$bundle_name/share/doc/whispers/docs/cli.md"
+install -Dm644 docs/troubleshooting.md \
+  "$stage_dir/$bundle_name/share/doc/whispers/docs/troubleshooting.md"
 install -Dm644 config.example.toml \
   "$stage_dir/$bundle_name/share/doc/whispers/config.example.toml"
 install -Dm644 LICENSE \
