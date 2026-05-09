@@ -87,6 +87,25 @@ Canonical example config:
 
 - [config.example.toml](../config.example.toml)
 
+## Shell completions
+
+The Arch packages and release bundles install completions in each shell's native
+system location. Fish discovers the installed
+`/usr/share/fish/vendor_completions.d/whispers.fish` automatically; open a new
+fish session after installing or upgrading the package.
+
+Cargo deliberately has no post-install hook, so `cargo install` cannot safely
+write into a shell configuration directory. For a Cargo install, fish needs this
+one-time user-level installation:
+
+```fish
+mkdir -p ~/.config/fish/completions
+whispers completions fish > ~/.config/fish/completions/whispers.fish
+```
+
+Fish loads that file automatically in future sessions. The same command can
+print scripts for Bash, Zsh, and Nushell when you need to install them manually.
+
 ## Keybinding examples
 
 Hyprland:

@@ -67,6 +67,9 @@ fn generates_fish_completion_script() {
     let script = generate_to_string(CompletionShell::Fish);
     assert!(script.contains("whispers"));
     assert!(script.contains("complete -c"));
+    assert!(script.contains(
+        "complete -c whispers -n \"__fish_whispers_using_subcommand completions\" -f -a \"bash zsh fish nushell\""
+    ));
 }
 
 #[test]
