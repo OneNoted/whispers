@@ -173,8 +173,15 @@ jobs:
 
       - name: Expose CUDA toolkit paths
         run: |
+          set -euo pipefail
+
           echo "CUDAToolkit_ROOT=$CUDA_PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           sudo ln -sfn "$CUDA_PATH" /usr/local/cuda
+
+          if [[ -f "$CUDA_PATH/lib64/stubs/libcuda.so" && ! -e "$CUDA_PATH/lib64/stubs/libcuda.so.1" ]]; then
+            sudo ln -s "$CUDA_PATH/lib64/stubs/libcuda.so" "$CUDA_PATH/lib64/stubs/libcuda.so.1"
+          fi
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
