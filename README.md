@@ -40,7 +40,7 @@ For the full package matrix, prerequisites, and post-install notes, see [docs/in
 
 ```sh
 paru -S whispers-bin
-# or: whispers-git / whispers-cuda-bin / whispers-cuda-git
+# or: whispers-git / whispers-cuda-bin / whispers-cuda-git / whispers-vulkan-git
 ```
 
 ### Cargo
@@ -49,7 +49,7 @@ paru -S whispers-bin
 cargo install whispers
 ```
 
-`cargo install whispers` follows crates.io releases. The AUR `*-bin` packages follow published GitHub release bundles, and `*-git` packages track the repository `main` branch. If you need rewrite or CUDA features, or want install details before choosing a package, use [docs/install.md](docs/install.md).
+`cargo install whispers` follows crates.io releases. The AUR `*-bin` packages follow published GitHub release bundles, and `*-git` packages track the repository `main` branch. If you need rewrite, CUDA, or Vulkan features, or want install details before choosing a package, use [docs/install.md](docs/install.md).
 
 ## Quick start
 
@@ -101,7 +101,7 @@ For the full troubleshooting guide, including the emitted `main-status.json` and
 
 ## Releases
 
-Tagged releases publish portable and CUDA-enabled Linux x86_64 bundles. The AUR `whispers-bin` and `whispers-cuda-bin` packages install those published release artifacts.
+Tagged releases publish portable, CUDA-enabled, and Vulkan-enabled Linux x86_64 bundles. The AUR `*-bin` packages install those published release artifacts.
 
 ## License
 

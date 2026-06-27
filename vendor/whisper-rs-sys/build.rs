@@ -116,19 +116,16 @@ fn main() {
         });
     }
 
-    if env::var("WHISPER_FORCE_GENERATE_BINDINGS").is_ok() {
+    if env::var("WHISPER_FORCE_GENERATE_BINDINGS").is_ok() || cfg!(feature = "vulkan") {
         let bindings = bindgen::Builder::default().header("wrapper.h");
 
         #[cfg(feature = "metal")]
-        {
-            bindings = bindings.header("whisper.cpp/ggml/include/ggml-metal.h");
-        }
+        let bindings = bindings.header("whisper.cpp/ggml/include/ggml-metal.h");
+
         #[cfg(feature = "vulkan")]
-        {
-            bindings = bindings
-                .header("whisper.cpp/ggml/include/ggml-vulkan.h")
-                .clang_arg("-DGGML_USE_VULKAN=1");
-        }
+        let bindings = bindings
+            .header("whisper.cpp/ggml/include/ggml-vulkan.h")
+            .clang_arg("-DGGML_USE_VULKAN=1");
 
         let bindings = bindings
             .clang_arg("-I./whisper.cpp/")

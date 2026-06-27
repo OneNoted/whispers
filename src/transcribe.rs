@@ -63,6 +63,7 @@ impl Transcript {
 pub struct WhisperLocal {
     ctx: WhisperContext,
     language: String,
+    threads: i32,
 }
 
 impl WhisperLocal {
@@ -105,9 +106,17 @@ impl WhisperLocal {
 
         tracing::info!("whisper model loaded successfully");
 
+        let threads = resolve_thread_count(config.threads);
+        tracing::info!(
+            "whisper worker threads: {} (configured={})",
+            threads,
+            config.threads
+        );
+
         Ok(Self {
             ctx,
             language: config.language.clone(),
+            threads,
         })
     }
 }
@@ -210,10 +219,7 @@ impl WhisperLocal {
         params.set_print_timestamps(false);
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);
-        let n_threads = std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
-            .unwrap_or(4);
-        params.set_n_threads(n_threads);
+        params.set_n_threads(self.threads);
 
         let mut state = self.ctx.create_state().map_err(|e| {
             WhsprError::Transcription(format!("failed to create whisper state: {e}"))
@@ -291,4 +297,44 @@ fn samples_to_ms(samples: usize, sample_rate: u32) -> u32 {
     }
 
     ((samples as u64).saturating_mul(1000) / sample_rate as u64).min(u32::MAX as u64) as u32
+}
+
+fn resolve_thread_count(configured: u16) -> i32 {
+    let available = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    resolve_thread_count_with_available(configured, available)
+}
+
+fn resolve_thread_count_with_available(configured: u16, available: usize) -> i32 {
+    if configured > 0 {
+        return i32::from(configured);
+    }
+
+    available.clamp(1, 8) as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_thread_count_with_available;
+
+    #[test]
+    fn auto_thread_count_caps_high_core_machines() {
+        assert_eq!(resolve_thread_count_with_available(0, 16), 8);
+    }
+
+    #[test]
+    fn auto_thread_count_keeps_small_machines_small() {
+        assert_eq!(resolve_thread_count_with_available(0, 4), 4);
+    }
+
+    #[test]
+    fn configured_thread_count_wins() {
+        assert_eq!(resolve_thread_count_with_available(12, 4), 12);
+    }
+
+    #[test]
+    fn auto_thread_count_never_returns_zero() {
+        assert_eq!(resolve_thread_count_with_available(0, 0), 1);
+    }
 }

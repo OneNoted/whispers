@@ -47,7 +47,7 @@ jobs:
       - name: Install Linux build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang pkg-config libasound2-dev
+          sudo apt-get install -y build-essential cmake clang pkg-config libasound2-dev libvulkan-dev glslc
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -60,6 +60,12 @@ jobs:
 
       - name: Check local rewrite feature only
         run: cargo check --no-default-features --features local-rewrite
+
+      - name: Check vulkan feature only
+        run: cargo check --no-default-features --features vulkan
+
+      - name: Check vulkan + local rewrite features
+        run: cargo check --no-default-features --features vulkan,local-rewrite
 
       - name: Package tarball
         run: cargo package --locked

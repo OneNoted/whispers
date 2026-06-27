@@ -23,6 +23,7 @@ on:
         options:
           - portable
           - cuda
+          - vulkan
 
 permissions:
   contents: write
@@ -59,7 +60,7 @@ jobs:
             --generate-notes
 
   build-portable:
-    if: github.event_name == 'push' || inputs.bundle_variant != 'cuda'
+    if: github.event_name == 'push' || inputs.bundle_variant == 'portable'
     needs: ensure-release
     runs-on: ubuntu-latest
     steps:
@@ -280,12 +281,98 @@ jobs:
             dist/${{ steps.meta.outputs.bundle }}.tar.gz
             dist/${{ steps.meta.outputs.bundle }}.tar.gz.sha256
 
+  build-vulkan:
+    if: github.event_name == 'push' || inputs.bundle_variant == 'vulkan'
+    needs: ensure-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current ref
+        if: github.event_name != 'workflow_dispatch' || inputs.publish_release != true
+        uses: actions/checkout@v5
+
+      - name: Checkout requested release tag
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libasound2-dev libvulkan-dev glslc
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compute release metadata
+        id: meta
+        env:
+          INPUT_PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          version=$(awk -F '"' '$1 ~ /^version *=/ { print $2; exit }' Cargo.toml)
+          bundle="whispers-vulkan-${version}-x86_64-unknown-linux-gnu"
+          publish=false
+          tag_name=""
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            publish=true
+            tag_name="${GITHUB_REF_NAME}"
+          elif [[ "${INPUT_PUBLISH_RELEASE:-false}" == "true" ]]; then
+            publish=true
+            tag_name="${INPUT_TAG_NAME}"
+          fi
+
+          if [[ "$publish" == "true" ]]; then
+            if [[ -z "$tag_name" ]]; then
+              echo "::error::tag_name is required when publish_release=true"
+              exit 1
+            fi
+            if [[ "$tag_name" != "v$version" ]]; then
+              echo "::error::tag ${tag_name} does not match Cargo.toml version v${version}"
+              exit 1
+            fi
+            checked_out_commit=$(git rev-parse HEAD)
+            tag_commit=$(git rev-list -n1 "$tag_name")
+            if [[ "$checked_out_commit" != "$tag_commit" ]]; then
+              echo "::error::checked out ${checked_out_commit} but tag ${tag_name} points to ${tag_commit}"
+              exit 1
+            fi
+          fi
+
+          {
+            echo "bundle=$bundle"
+            echo "publish=$publish"
+            echo "tag_name=$tag_name"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build Vulkan release bundle
+        env:
+          WHISPERS_RELEASE_BUNDLE_PREFIX: whispers-vulkan
+          WHISPERS_RELEASE_FEATURES: vulkan,local-rewrite,osd
+        run: scripts/build-release-bundle.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Upload Vulkan release bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulkan-release-bundle
+          path: |
+            dist/${{ steps.meta.outputs.bundle }}.tar.gz
+            dist/${{ steps.meta.outputs.bundle }}.tar.gz.sha256
+
   publish-release-push:
     if: github.event_name == 'push'
     needs:
       - ensure-release
       - build-portable
       - build-cuda
+      - build-vulkan
     runs-on: ubuntu-latest
     steps:
       - name: Download portable artifact
@@ -300,6 +387,12 @@ jobs:
           name: cuda-release-bundle
           path: dist
 
+      - name: Download Vulkan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vulkan-release-bundle
+          path: dist
+
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -310,7 +403,7 @@ jobs:
           gh release upload "$TAG_NAME" dist/* --clobber
 
   publish-release-portable-dispatch:
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.bundle_variant != 'cuda'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.bundle_variant == 'portable'
     needs:
       - ensure-release
       - build-portable
@@ -345,6 +438,28 @@ jobs:
           path: dist
 
       - name: Publish CUDA release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG_NAME" dist/* --clobber
+
+  publish-release-vulkan-dispatch:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.bundle_variant == 'vulkan'
+    needs:
+      - ensure-release
+      - build-vulkan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Vulkan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vulkan-release-bundle
+          path: dist
+
+      - name: Publish Vulkan release assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

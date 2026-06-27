@@ -31,6 +31,7 @@ By default it mirrors the repo's main CI workflow as closely as practical:
 - `cargo check --no-default-features --features local-rewrite`
 - `cargo package --locked --allow-dirty`
 - CUDA feature checks when `nvcc` is available
+- Vulkan feature checks when Vulkan development files are available
 - `scripts/build-release-bundle.sh`
 
 ## Useful overrides
@@ -39,6 +40,7 @@ You can skip expensive local-only steps with environment variables:
 
 ```sh
 WHISPERS_LOCAL_CI_SKIP_CUDA=1 scripts/local-ci.sh
+WHISPERS_LOCAL_CI_SKIP_VULKAN=1 scripts/local-ci.sh
 WHISPERS_LOCAL_CI_SKIP_PACKAGE=1 scripts/local-ci.sh
 WHISPERS_LOCAL_CI_SKIP_RELEASE_BUNDLE=1 scripts/local-ci.sh
 ```
