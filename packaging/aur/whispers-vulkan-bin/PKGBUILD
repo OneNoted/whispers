@@ -1,21 +1,25 @@
-pkgname=whispers-cuda-bin
+pkgname=whispers-vulkan-bin
 pkgver=0.2.4
 pkgrel=1
-pkgdesc='Local-first speech-to-text dictation for Wayland (prebuilt CUDA release bundle)'
+pkgdesc='Local-first speech-to-text dictation for Wayland (prebuilt Vulkan release bundle)'
 arch=('x86_64')
 url='https://github.com/OneNoted/whispers'
 license=('MIT')
-depends=('alsa-lib' 'cuda' 'gcc-libs' 'glibc' 'noto-fonts' 'wl-clipboard')
-optdepends=('python: experimental faster-whisper and NeMo runtimes')
-provides=('whispers')
-conflicts=('whispers' 'whispers-bin' 'whispers-git' 'whispers-cuda-git' 'whispers-vulkan-bin' 'whispers-vulkan-git')
-source=(
-  "$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/whispers-cuda-$pkgver-x86_64-unknown-linux-gnu.tar.gz"
+depends=('alsa-lib' 'gcc-libs' 'glibc' 'noto-fonts' 'vulkan-icd-loader' 'wl-clipboard')
+optdepends=(
+  'python: experimental faster-whisper and NeMo runtimes'
+  'vulkan-radeon: AMD Radeon Vulkan driver'
+  'vulkan-driver: Vulkan driver for other GPUs'
 )
-sha256sums=('aca92c97979e4e0872ef5c682672a0aa5ca8392c5474b8d3ab5d413a63bad3b1')
+provides=('whispers')
+conflicts=('whispers' 'whispers-bin' 'whispers-git' 'whispers-cuda-bin' 'whispers-cuda-git' 'whispers-vulkan-git')
+source=(
+  "$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/whispers-vulkan-$pkgver-x86_64-unknown-linux-gnu.tar.gz"
+)
+sha256sums=('0f444f104ccb9dcdc5ff7e8d3eff210aae8ed69b36f176f54da921318cf40391')
 
 package() {
-  local bundle_dir="$srcdir/whispers-cuda-$pkgver-x86_64-unknown-linux-gnu"
+  local bundle_dir="$srcdir/whispers-vulkan-$pkgver-x86_64-unknown-linux-gnu"
 
   install -Dm755 "$bundle_dir/bin/whispers" \
     "$pkgdir/usr/bin/whispers"

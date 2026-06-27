@@ -1,6 +1,6 @@
 pkgbase = whispers-cuda-bin
 	pkgdesc = Local-first speech-to-text dictation for Wayland (prebuilt CUDA release bundle)
-	pkgver = 0.2.2
+	pkgver = 0.2.4
 	pkgrel = 1
 	url = https://github.com/OneNoted/whispers
 	arch = x86_64
@@ -19,7 +19,7 @@ pkgbase = whispers-cuda-bin
 	conflicts = whispers-cuda-git
 	conflicts = whispers-vulkan-bin
 	conflicts = whispers-vulkan-git
-	source = whispers-cuda-bin-0.2.2.tar.gz::https://github.com/OneNoted/whispers/releases/download/v0.2.2/whispers-cuda-0.2.2-x86_64-unknown-linux-gnu.tar.gz
-	sha256sums = 6c09956ab70cd1e83874e80c875b9c86721d76ce06008b0b00bd89256bc7f57a
+	source = whispers-cuda-bin-0.2.4.tar.gz::https://github.com/OneNoted/whispers/releases/download/v0.2.4/whispers-cuda-0.2.4-x86_64-unknown-linux-gnu.tar.gz
+	sha256sums = aca92c97979e4e0872ef5c682672a0aa5ca8392c5474b8d3ab5d413a63bad3b1
 
 pkgname = whispers-cuda-bin
