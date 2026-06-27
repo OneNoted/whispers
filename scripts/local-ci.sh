@@ -41,11 +41,13 @@ fi
 
 if [[ "$skip_vulkan" == "1" ]]; then
   printf '\n==> Skipping Vulkan checks because WHISPERS_LOCAL_CI_SKIP_VULKAN=1\n'
-elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists vulkan; then
+elif command -v pkg-config >/dev/null 2>&1 \
+  && pkg-config --exists vulkan \
+  && command -v glslc >/dev/null 2>&1; then
   run_step "Check vulkan feature only" cargo check --no-default-features --features vulkan
   run_step "Check vulkan + local rewrite features" cargo check --no-default-features --features vulkan,local-rewrite
 else
-  printf '\n==> Skipping Vulkan checks because Vulkan development files are not available to pkg-config\n'
+  printf '\n==> Skipping Vulkan checks because Vulkan development files or glslc are not available\n'
 fi
 
 if [[ "$skip_release_bundle" != "1" ]]; then

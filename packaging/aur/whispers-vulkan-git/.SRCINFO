@@ -10,6 +10,7 @@ pkgbase = whispers-vulkan-git
 	makedepends = cmake
 	makedepends = git
 	makedepends = pkgconf
+	makedepends = shaderc
 	makedepends = vulkan-headers
 	depends = alsa-lib
 	depends = gcc-libs

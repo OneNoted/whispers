@@ -45,6 +45,8 @@ whispers cloud check
 
 For Vulkan builds, make sure the Vulkan loader and a GPU driver are installed. On Arch with AMD graphics, that usually means `vulkan-icd-loader` plus `vulkan-radeon`. `vulkaninfo` from `vulkan-tools` is a quick way to confirm the driver is visible.
 
+If a source build fails with a missing `glslc`, install the shader compiler package (`shaderc` on Arch, `glslc` on Ubuntu).
+
 If transcription keeps saturating too many CPU cores, tune:
 
 ```toml

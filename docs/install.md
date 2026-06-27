@@ -10,11 +10,11 @@
 - Rust 1.85+ for Cargo installs and source builds
 - CUDA toolkit only when you build with the `cuda` feature yourself
 - Vulkan loader plus a GPU driver when you use a Vulkan-enabled build
-- Vulkan headers when you build with the `vulkan` feature yourself
+- Vulkan headers and `glslc` when you build with the `vulkan` feature yourself
 
 If `/dev/uinput` is not ready, run `whispers setup`. It can configure the dedicated `uinput` group and matching `udev` rule automatically.
 
-On Arch with AMD graphics, the runtime Vulkan driver package is usually `vulkan-radeon`. `vulkan-tools` is useful for confirming the driver with `vulkaninfo`, but it is not required by `whispers`.
+On Arch with AMD graphics, the runtime Vulkan driver package is usually `vulkan-radeon`. Source builds also need `vulkan-headers` and `shaderc`. `vulkan-tools` is useful for confirming the driver with `vulkaninfo`, but it is not required by `whispers`.
 
 ## Arch Linux (`paru`)
 
