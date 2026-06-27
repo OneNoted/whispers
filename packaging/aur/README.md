@@ -24,8 +24,15 @@ makepkg --printsrcinfo > .SRCINFO
 ## Updating `whispers-bin` / `whispers-cuda-bin`
 
 1. Cut a GitHub release for `vX.Y.Z`.
-2. Update `pkgver` and `sha256sums` in the matching `*-bin/PKGBUILD`.
-3. Regenerate the matching `*-bin/.SRCINFO`.
+2. Wait for the release workflow to upload the matching tarball and `.sha256`
+   asset.
+3. Update `pkgver` and `sha256sums` in the matching `*-bin/PKGBUILD` from the
+   published release asset.
+4. Regenerate the matching `*-bin/.SRCINFO`.
+
+Do not update the `*-bin` AUR packages from `main` alone. They install tagged
+release bundles, so user-visible README behavior in `main` only reaches
+`whispers-bin` and `whispers-cuda-bin` after a new GitHub release is published.
 
 ## Publishing to the AUR
 
