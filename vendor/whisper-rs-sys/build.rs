@@ -116,7 +116,7 @@ fn main() {
         });
     }
 
-    if env::var("WHISPER_FORCE_GENERATE_BINDINGS").is_ok() {
+    if env::var("WHISPER_FORCE_GENERATE_BINDINGS").is_ok() || cfg!(feature = "vulkan") {
         let bindings = bindgen::Builder::default().header("wrapper.h");
 
         #[cfg(feature = "metal")]
