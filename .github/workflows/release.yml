@@ -303,6 +303,7 @@ jobs:
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -324,6 +325,7 @@ jobs:
       - name: Publish portable release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ inputs.tag_name }}
         run: |
           set -euo pipefail
@@ -345,6 +347,7 @@ jobs:
       - name: Publish CUDA release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ inputs.tag_name }}
         run: |
           set -euo pipefail
