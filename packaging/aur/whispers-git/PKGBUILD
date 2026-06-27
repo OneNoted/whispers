@@ -10,7 +10,7 @@ makedepends=('cargo' 'clang' 'cmake' 'git' 'pkgconf')
 depends=('alsa-lib' 'gcc-libs' 'glibc' 'noto-fonts' 'wl-clipboard')
 optdepends=('python: experimental faster-whisper and NeMo runtimes')
 provides=('whispers')
-conflicts=('whispers' 'whispers-bin' 'whispers-cuda-bin' 'whispers-cuda-git')
+conflicts=('whispers' 'whispers-bin' 'whispers-cuda-bin' 'whispers-cuda-git' 'whispers-vulkan-bin' 'whispers-vulkan-git')
 source=("$_pkgname::git+$url.git")
 sha256sums=('SKIP')
 

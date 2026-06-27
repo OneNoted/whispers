@@ -58,6 +58,7 @@ pub struct TranscriptionConfig {
     pub language: String,
     pub use_gpu: bool,
     pub flash_attn: bool,
+    pub threads: u16,
     pub idle_timeout_ms: u64,
 }
 
@@ -258,6 +259,7 @@ impl Default for TranscriptionConfig {
             language: "auto".into(),
             use_gpu: true,
             flash_attn: true,
+            threads: 0,
             idle_timeout_ms: 120000,
         }
     }

@@ -8,7 +8,7 @@ license=('MIT')
 depends=('alsa-lib' 'gcc-libs' 'glibc' 'noto-fonts' 'wl-clipboard')
 optdepends=('python: experimental faster-whisper and NeMo runtimes')
 provides=('whispers')
-conflicts=('whispers' 'whispers-git' 'whispers-cuda-bin' 'whispers-cuda-git')
+conflicts=('whispers' 'whispers-git' 'whispers-cuda-bin' 'whispers-cuda-git' 'whispers-vulkan-bin' 'whispers-vulkan-git')
 source=(
   "$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/whispers-$pkgver-x86_64-unknown-linux-gnu.tar.gz"
 )

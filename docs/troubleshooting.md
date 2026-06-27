@@ -39,6 +39,21 @@ If cloud ASR or rewrite is configured but not working, validate the current prov
 whispers cloud check
 ```
 
+## Local acceleration is not active
+
+`[transcription].use_gpu = true` requests GPU acceleration from the local `whisper_cpp` backend, but the binary also has to be built with a GPU backend such as `vulkan` or `cuda`.
+
+For Vulkan builds, make sure the Vulkan loader and a GPU driver are installed. On Arch with AMD graphics, that usually means `vulkan-icd-loader` plus `vulkan-radeon`. `vulkaninfo` from `vulkan-tools` is a quick way to confirm the driver is visible.
+
+If transcription keeps saturating too many CPU cores, tune:
+
+```toml
+[transcription]
+threads = 0
+```
+
+`threads = 0` is auto and caps local `whisper_cpp` at 8 logical CPUs. Set a positive value to force a specific worker count.
+
 ## Inspect rewrite resource paths
 
 These helpers are useful when you want to confirm which runtime files the current config points at:

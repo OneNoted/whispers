@@ -6,11 +6,13 @@ This repository keeps the maintained AUR sources for:
 - `whispers-git`: builds the latest `main` branch without CUDA
 - `whispers-cuda-bin`: installs the CUDA-enabled GitHub release bundle
 - `whispers-cuda-git`: builds the latest `main` branch with CUDA
+- `whispers-vulkan-git`: builds the latest `main` branch with Vulkan
 
 Current feature sets:
 
 - `whispers-bin` / `whispers-git`: `local-rewrite,osd`
 - `whispers-cuda-bin` / `whispers-cuda-git`: `cuda,local-rewrite,osd`
+- `whispers-vulkan-git`: `vulkan,local-rewrite,osd`
 
 ## Refreshing metadata
 
@@ -31,8 +33,11 @@ makepkg --printsrcinfo > .SRCINFO
 4. Regenerate the matching `*-bin/.SRCINFO`.
 
 Do not update the `*-bin` AUR packages from `main` alone. They install tagged
-release bundles, so user-visible README behavior in `main` only reaches
-`whispers-bin` and `whispers-cuda-bin` after a new GitHub release is published.
+release bundles, so user-visible README behavior in `main` only reaches the
+matching `*-bin` package after a new GitHub release is published.
+
+Add or update `whispers-vulkan-bin` only after the target release includes a
+matching `whispers-vulkan-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz` asset.
 
 ## Publishing to the AUR
 
@@ -43,3 +48,4 @@ matching directory to:
 - `ssh://aur@aur.archlinux.org/whispers-git.git`
 - `ssh://aur@aur.archlinux.org/whispers-cuda-bin.git`
 - `ssh://aur@aur.archlinux.org/whispers-cuda-git.git`
+- `ssh://aur@aur.archlinux.org/whispers-vulkan-git.git`

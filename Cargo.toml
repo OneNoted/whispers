@@ -93,6 +93,7 @@ osd = [
     "dep:font8x8",
     "dep:fontdue",
 ]
+vulkan = ["whisper-rs/vulkan"]
 
 [[bin]]
 name = "whispers"

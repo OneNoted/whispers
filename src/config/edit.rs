@@ -41,6 +41,8 @@ language = "auto"
 use_gpu = true
 # Enable flash attention when GPU is enabled
 flash_attn = true
+# Worker threads for whisper_cpp (0 = auto, capped to 8 logical CPUs)
+threads = 0
 # How long the hidden ASR worker stays warm without requests (0 = never expire)
 idle_timeout_ms = 120000
 

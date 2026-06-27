@@ -1,16 +1,20 @@
-pkgname=whispers-cuda-git
+pkgname=whispers-vulkan-git
 _pkgname=whispers
 pkgver=r0.0000000
 pkgrel=1
-pkgdesc='Local-first speech-to-text dictation for Wayland (latest git build with CUDA)'
+pkgdesc='Local-first speech-to-text dictation for Wayland (latest git build with Vulkan)'
 arch=('x86_64')
 url='https://github.com/OneNoted/whispers'
 license=('MIT')
-makedepends=('cargo' 'clang' 'cmake' 'cuda' 'git' 'pkgconf')
-depends=('alsa-lib' 'cuda' 'gcc-libs' 'glibc' 'noto-fonts' 'wl-clipboard')
-optdepends=('python: experimental faster-whisper and NeMo runtimes')
+makedepends=('cargo' 'clang' 'cmake' 'git' 'pkgconf' 'vulkan-headers')
+depends=('alsa-lib' 'gcc-libs' 'glibc' 'noto-fonts' 'vulkan-icd-loader' 'wl-clipboard')
+optdepends=(
+  'python: experimental faster-whisper and NeMo runtimes'
+  'vulkan-radeon: AMD Radeon Vulkan driver'
+  'vulkan-driver: Vulkan driver for other GPUs'
+)
 provides=('whispers')
-conflicts=('whispers' 'whispers-bin' 'whispers-git' 'whispers-cuda-bin' 'whispers-vulkan-bin' 'whispers-vulkan-git')
+conflicts=('whispers' 'whispers-bin' 'whispers-git' 'whispers-cuda-bin' 'whispers-cuda-git' 'whispers-vulkan-bin')
 source=("$_pkgname::git+$url.git")
 sha256sums=('SKIP')
 
@@ -39,7 +43,7 @@ build() {
     --frozen \
     --release \
     --no-default-features \
-    --features cuda,local-rewrite,osd
+    --features vulkan,local-rewrite,osd
 
   mkdir -p completions
   target/release/whispers completions bash > completions/whispers.bash

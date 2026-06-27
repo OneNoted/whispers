@@ -12,6 +12,7 @@ fn load_missing_file_uses_defaults() {
         config.transcription.backend,
         TranscriptionBackend::WhisperCpp
     );
+    assert_eq!(config.transcription.threads, 0);
     assert_eq!(config.postprocess.mode, PostprocessMode::Raw);
     assert_eq!(config.personalization.snippet_trigger, "insert");
     assert_eq!(config.rewrite.selected_model, "qwen-3.5-4b-q4_k_m");
@@ -135,6 +136,7 @@ flash_attn = false
     assert_eq!(loaded.transcription.language, "en");
     assert!(!loaded.transcription.use_gpu);
     assert!(!loaded.transcription.flash_attn);
+    assert_eq!(loaded.transcription.threads, 0);
 }
 
 #[test]
