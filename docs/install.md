@@ -89,8 +89,9 @@ Canonical example config:
 
 ## Shell completions
 
-The Arch packages and release bundles install completions in each shell's native
-system location. Fish discovers the installed
+The Arch packages install completions in each shell's native system location.
+Release bundles contain the same files under `share/` for installation into a
+system prefix. Fish discovers the installed
 `/usr/share/fish/vendor_completions.d/whispers.fish` automatically; open a new
 fish session after installing or upgrading the package.
 
