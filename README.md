@@ -13,6 +13,10 @@ from PipeWire, streams speech through Nemotron, applies your vocabulary and
 spoken symbols, conservatively cleans up the intended text with a local Qwen
 model, then types it into the window where dictation began.
 
+A compact bottom-center OSD shows whether Whispers is listening, transcribing,
+enhancing, or delivering. It runs out of process through Quickshell, keeping GUI
+toolkits out of the Rust build.
+
 Saying “this slash that” produces `this/that`. Saying “the word slash” keeps the
 word. `literal slash` is the explicit escape hatch.
 

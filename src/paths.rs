@@ -26,6 +26,10 @@ pub fn vocabulary() -> Result<PathBuf> {
     data_dir().map(|path| path.join("vocabulary.toml"))
 }
 
+pub fn osd_config() -> Result<PathBuf> {
+    data_dir().map(|path| path.join("ui/shell.qml"))
+}
+
 pub fn recognition_model_dir(model: &str) -> Result<PathBuf> {
     if let Some(path) = env::var_os("WHISPERS_MODEL_DIR") {
         return Ok(PathBuf::from(path));

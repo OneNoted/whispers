@@ -21,6 +21,7 @@ include = [
     "LICENSE",
     "NOTICE",
     "sounds/*.wav",
+    "ui/*.qml",
     "src/**",
     "tests/**",
 ]

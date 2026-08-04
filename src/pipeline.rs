@@ -36,6 +36,7 @@ struct LocalDictation {
 
 impl LocalPipeline {
     pub fn new(config: Config) -> Self {
+        desktop::prewarm_osd();
         let enhancer = Enhancer::new(config.enhancement.clone());
         enhancer.prewarm();
         Self {
@@ -105,10 +106,15 @@ impl Pipeline for LocalPipeline {
     fn deliver(&self, dictation: &CompletedDictation) -> Result<()> {
         desktop::deliver(&dictation.text, dictation.target.as_deref())
     }
+
+    fn cancel_pending(&self) {
+        desktop::hide_osd();
+    }
 }
 
 impl ActiveDictation for LocalDictation {
     fn finish(mut self: Box<Self>, cancelled: &AtomicBool) -> Result<CompletedDictation> {
+        let mut osd = OsdHandoff::new();
         let recording = self
             .recording
             .take()
@@ -120,7 +126,9 @@ impl ActiveDictation for LocalDictation {
         if self.config.audio.feedback {
             desktop::play_cue("stop");
         }
+        desktop::show_transcribing();
         if cancelled.load(Ordering::Acquire) || !audio::has_speech(&samples) {
+            osd.dismiss();
             return Ok(CompletedDictation {
                 text: String::new(),
                 target: None,
@@ -150,6 +158,7 @@ impl ActiveDictation for LocalDictation {
             transcribe_with_whisper(&self.config, &samples)?
         };
         if cancelled.load(Ordering::Acquire) {
+            osd.dismiss();
             return Ok(CompletedDictation {
                 text: String::new(),
                 target: None,
@@ -157,16 +166,19 @@ impl ActiveDictation for LocalDictation {
         }
         let personalized = self.vocabulary.apply(&transcript);
         let normalized = normalize_spoken_text(&personalized);
+        desktop::show_enhancing();
         let enhanced = self.enhancer.enhance(&normalized).unwrap_or_else(|error| {
             eprintln!("whispers: enhancement unavailable, using deterministic text: {error}");
             normalized
         });
         if cancelled.load(Ordering::Acquire) {
+            osd.dismiss();
             return Ok(CompletedDictation {
                 text: String::new(),
                 target: None,
             });
         }
+        osd.handoff();
         Ok(CompletedDictation {
             text: enhanced,
             target: self.target.map(|focus| focus.identity),
@@ -189,7 +201,39 @@ impl ActiveDictation for LocalDictation {
                 }
             }
         }
+        desktop::hide_osd();
         Ok(())
+    }
+}
+
+struct OsdHandoff {
+    handed_off: bool,
+    dismissed: bool,
+}
+
+impl OsdHandoff {
+    const fn new() -> Self {
+        Self {
+            handed_off: false,
+            dismissed: false,
+        }
+    }
+
+    fn handoff(&mut self) {
+        self.handed_off = true;
+    }
+
+    fn dismiss(&mut self) {
+        self.dismissed = true;
+        desktop::hide_osd();
+    }
+}
+
+impl Drop for OsdHandoff {
+    fn drop(&mut self) {
+        if !self.handed_off && !self.dismissed {
+            desktop::show_error("Recognition failed");
+        }
     }
 }
 

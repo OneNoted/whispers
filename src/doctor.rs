@@ -83,7 +83,8 @@ pub fn run() -> Report {
         ));
     }
     command_check(&mut checks, "safe clipboard", "wl-copy", true);
-    command_check(&mut checks, "notifications", "notify-send", false);
+    osd_check(&mut checks);
+    command_check(&mut checks, "notification fallback", "notify-send", false);
     command_check(&mut checks, "audio feedback", "pw-play", false);
     command_check(&mut checks, "fallback ASR", "whisper-cli", false);
     if env::var_os("XDG_RUNTIME_DIR").is_some() {
@@ -117,6 +118,26 @@ pub fn run() -> Report {
         enhancement_checks(&mut checks, &config);
     }
     Report { checks }
+}
+
+fn osd_check(checks: &mut Vec<Check>) {
+    if find_command("quickshell").is_none() || find_command("qs").is_none() {
+        checks.push(warn(
+            "status OSD",
+            "Quickshell is missing; notifications will be used",
+        ));
+        return;
+    }
+    match paths::osd_config() {
+        Ok(path) if path.is_file() => {
+            checks.push(pass("status OSD", format!("{} is ready", path.display())));
+        }
+        Ok(_) => checks.push(pass(
+            "status OSD",
+            "Quickshell is available; the OSD will be installed on first use",
+        )),
+        Err(error) => checks.push(warn("status OSD", error.to_string())),
+    }
 }
 
 fn enhancement_checks(checks: &mut Vec<Check>, config: &Config) {

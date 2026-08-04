@@ -32,6 +32,7 @@ pub trait ActiveDictation: Send {
 pub trait Pipeline: Send + Sync + 'static {
     fn start(&self) -> Result<Box<dyn ActiveDictation>>;
     fn deliver(&self, dictation: &CompletedDictation) -> Result<()>;
+    fn cancel_pending(&self) {}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,6 +116,7 @@ impl<P: Pipeline> Service<P> {
             }
             State::Finalizing(cancelled) => {
                 cancelled.store(true, Ordering::Release);
+                self.pipeline.cancel_pending();
                 Ok(Some("pending delivery cancelled".into()))
             }
             State::Delivering => Err(Error::message("delivery is already in progress")),
@@ -134,6 +136,7 @@ impl<P: Pipeline> Service<P> {
             }
             State::Finalizing(cancelled) => {
                 cancelled.store(true, Ordering::Release);
+                self.pipeline.cancel_pending();
                 Ok(Some("pending delivery cancelled".into()))
             }
             State::Delivering => Err(Error::message("delivery is already in progress")),

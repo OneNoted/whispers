@@ -10,7 +10,8 @@ the application.
 - `wtype`
 - `wl-copy` from `wl-clipboard`
 - `curl`, `tar`, `bzip2`, and `sha256sum` for setup
-- `notify-send` for optional notifications
+- Quickshell for the status OSD
+- `notify-send` for the optional fallback when Quickshell is unavailable
 - Rust 1.85 or newer when building from source
 
 The managed assets require about 3.5 GB of download bandwidth and somewhat more
@@ -37,6 +38,11 @@ whispers setup
 There are no feature combinations or CUDA-specific application builds. The
 current managed runtimes are CPU-only; a future GPU runtime can be shipped
 independently without returning ML toolchains to the Whispers compile graph.
+
+The binary installs a small Quickshell status OSD on first use. It remains a
+separate process, so the interface adds no GUI toolkit to the Rust dependency
+graph. The OSD follows dictation through listening, transcription, enhancement,
+and delivery without taking keyboard focus.
 
 ## Setup choices
 
