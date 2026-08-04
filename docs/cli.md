@@ -1,100 +1,52 @@
 # CLI guide
 
-For the full generated help, run `whispers --help` or `whispers <command> --help`.
-
-## Top-level commands
+Whispers intentionally has a small command surface. Run `whispers --help` for
+the exact installed version.
 
 | Command | Purpose |
 | --- | --- |
-| `whispers` | Start or stop the default dictation loop |
-| `whispers setup` | Guided setup for local, cloud, and experimental dictation paths |
-| `whispers transcribe <file>` | Transcribe an audio file to stdout or a file |
-| `whispers model` | Legacy `whisper_cpp` model commands |
-| `whispers asr-model` | Manage ASR models across recommended and experimental backends |
-| `whispers rewrite-model` | Manage local rewrite models |
-| `whispers dictionary` | Manage deterministic replacements |
-| `whispers app-rule` | Manage app-aware rewrite policy rules |
-| `whispers glossary` | Manage technical glossary entries |
-| `whispers cloud check` | Validate cloud config and connectivity |
-| `whispers snippets` | Manage spoken snippets |
-| `whispers rewrite-instructions-path` | Print the custom rewrite instructions file path |
-| `whispers completions [shell]` | Print shell completions to stdout |
+| `whispers` or `whispers toggle` | Start listening, or finish the current dictation |
+| `whispers cancel` | Cancel listening, finalization, or pending delivery |
+| `whispers status` | Print `idle`, `listening`, `finalizing`, or `delivering` |
+| `whispers setup` | Migrate config and install pinned runtimes/models |
+| `whispers doctor` | Check config, runtime files, dynamic loading, and desktop tools |
+| `whispers vocabulary list` | Show canonical terms and spoken aliases |
+| `whispers vocabulary add` | Add aliases for a canonical term |
+| `whispers vocabulary remove` | Remove a canonical term |
 
-## Common flows
+## Vocabulary
 
-### Setup and dictation
+Vocabulary is one shared input to recognition and deterministic correction:
 
 ```sh
-whispers setup
-whispers
-```
-
-### File transcription
-
-```sh
-whispers transcribe audio.wav
-whispers transcribe meeting.m4a --output transcript.txt
-whispers transcribe audio.wav --raw
-```
-
-### ASR model management
-
-```sh
-whispers asr-model list
-whispers asr-model download large-v3-turbo
-whispers asr-model select large-v3-turbo
-```
-
-`whispers model` still exists for legacy `whisper_cpp` flows, but `whispers asr-model` is the preferred interface.
-
-### Rewrite model management
-
-```sh
-whispers rewrite-model list
-whispers rewrite-model download qwen-3.5-4b-q4_k_m
-whispers rewrite-model select qwen-3.5-4b-q4_k_m
-```
-
-### Personalization
-
-```sh
-whispers dictionary add "wisper flow" "Wispr Flow"
-whispers snippets add signature "Best regards,\nNotes"
-```
-
-### Rewrite policy files
-
-```sh
-whispers app-rule path
-whispers glossary path
-whispers rewrite-instructions-path
-```
-
-### App-aware rewrite rules
-
-```sh
-whispers app-rule list
-whispers app-rule add jira-browser \
-  "Prefer issue IDs and preserve markdown punctuation" \
-  --surface-kind browser \
-  --browser-domain-contains atlassian.net
-whispers app-rule remove jira-browser
-```
-
-### Technical glossary entries
-
-```sh
-whispers glossary list
-whispers glossary add serde_json \
+whispers vocabulary add serde_json \
   --alias "surdy json" \
-  --alias "serdy json" \
-  --surface-kind editor
-whispers glossary remove serde_json
+  --alias "serde json"
+whispers vocabulary list
+whispers vocabulary remove serde_json
 ```
 
-### Cloud and shell integration
+The store is `${XDG_DATA_HOME:-~/.local/share}/whispers/vocabulary.toml` and is
+written atomically.
+
+## Spoken structure and symbols
+
+Common symbols are deterministic when spoken between terms:
+
+```text
+this slash that       → this/that
+foo underscore bar    → foo_bar
+first new line second → first\nsecond
+```
+
+Use `literal` to force a symbol by itself (`literal slash`). Lexical uses such as
+“the word slash” are kept as words.
+
+## Setup
 
 ```sh
-whispers cloud check
-whispers completions zsh
+whispers setup [--runtime-pack DIR] [--no-service]
 ```
+
+Network setup verifies SHA-256 before atomically installing each asset. An
+offline pack is copied without following symbolic links or special files.

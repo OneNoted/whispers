@@ -1,5 +1,4 @@
-[env]
-WHISPER_DONT_GENERATE_BINDINGS = "1"
-
-[patch.crates-io]
-whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
+[alias]
+fmt-check = "fmt --all -- --check"
+lint = "clippy --all-targets --all-features -- -D warnings"
+qa = "test --all-targets --all-features"

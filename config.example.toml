@@ -1,122 +1,21 @@
-# whispers configuration
-#
-# Keybinding is handled by your compositor. Example for Hyprland:
-#   bind = SUPER ALT, D, exec, whispers
-#
-# First invocation starts recording, second invocation stops + transcribes + pastes.
+version = 2
+language = "auto"
 
 [audio]
-# Input device name (empty = system default)
+# Empty uses the PipeWire default source.
 device = ""
-# Sample rate in Hz (ASR requires 16000)
-sample_rate = 16000
+feedback = true
 
-[transcription]
-# Active transcription backend ("whisper_cpp", "faster_whisper", "nemo", or "cloud")
-backend = "whisper_cpp"
-# Cloud fallback behavior ("configured_local" or "none")
-fallback = "configured_local"
-# Local backend used directly in local mode and as the cloud fallback backend
-local_backend = "whisper_cpp"
-# Managed ASR model name for the selected backend
-selected_model = "large-v3-turbo"
-# Path to the local backend-specific model or empty to use the selected managed model
-# Manage models with: whispers asr-model list / download / select
-model_path = "~/.local/share/whispers/ggml-large-v3-turbo.bin"
-# Language code ("en", "fr", "de", etc.) or "auto" for auto-detect
-language = "auto"
-# Enable GPU acceleration (set false to force CPU)
-use_gpu = true
-# Enable flash attention when GPU is enabled
-flash_attn = true
-# How long the hidden ASR worker stays warm without requests (0 = never expire)
-idle_timeout_ms = 120000
+[recognition]
+# The managed runtime and model installed by `whispers setup`.
+runtime = "sherpa-onnx"
+model = "nemotron-3.5-asr-streaming-0.6b-560ms-int8"
+# Existing whisper.cpp model used only if streaming ASR is unavailable.
+fallback_model = "ggml-large-v3-turbo.bin"
 
-[postprocess]
-# "raw" (default), "rewrite", or "legacy_basic" for deprecated cleanup configs
-mode = "raw"
-
-[session]
-# Enable short-lived session backtracking in rewrite modes
+[enhancement]
 enabled = true
-# How many recent dictation entries to keep in the runtime session ledger
-max_entries = 3
-# How long a recent dictation entry stays eligible for revision
-max_age_ms = 8000
-# Maximum graphemes that may be deleted when revising the latest entry
-max_replace_graphemes = 400
-
-[personalization]
-# Dictionary replacements applied in all modes
-dictionary_path = "~/.local/share/whispers/dictionary.toml"
-# Snippets expanded via an explicit spoken trigger
-snippets_path = "~/.local/share/whispers/snippets.toml"
-# Spoken trigger phrase used before snippet names
-snippet_trigger = "insert"
-
-[rewrite]
-# Rewrite backend ("local" or "cloud")
-backend = "local"
-# Cloud fallback behavior ("local" or "none")
-fallback = "local"
-# Managed rewrite model name for rewrite mode
-selected_model = "qwen-3.5-4b-q4_k_m"
-# Manual GGUF path override (empty = use selected managed model)
-# Custom rewrite models should be chat-capable GGUFs with an embedded
-# chat template that llama.cpp can apply at runtime.
-model_path = ""
-# Append-only custom rewrite instructions file (empty = disabled)
-instructions_path = "~/.local/share/whispers/rewrite-instructions.txt"
-# Rewrite profile selection ("auto", "qwen", "generic", or "llama_compat")
-profile = "auto"
-# Timeout for local rewrite inference in milliseconds
-timeout_ms = 30000
-# How long the hidden rewrite worker stays warm without requests
-idle_timeout_ms = 120000
-# Maximum characters accepted from the rewrite model
-max_output_chars = 1200
-# Maximum tokens to generate for rewritten output
-max_tokens = 256
-# App-aware rewrite policy rules used by postprocess.mode = "rewrite"
-policy_path = "~/.local/share/whispers/app-rewrite-policy.toml"
-# Technical glossary used by postprocess.mode = "rewrite"
-glossary_path = "~/.local/share/whispers/technical-glossary.toml"
-# Default correction policy ("conservative", "balanced", or "aggressive")
-default_correction_policy = "balanced"
-
-[cloud]
-# Cloud provider ("openai" or "openai_compatible")
-provider = "openai"
-# Custom base URL for openai_compatible providers (empty uses the OpenAI default)
-base_url = ""
-# Optional API key stored directly in the config (empty = use api_key_env instead)
-api_key = ""
-# Environment variable holding the API key
-api_key_env = "OPENAI_API_KEY"
-# Network connect timeout in milliseconds
-connect_timeout_ms = 3000
-# End-to-end request timeout in milliseconds
-request_timeout_ms = 15000
-
-[cloud.transcription]
-# Cloud transcription model
-model = "gpt-4o-mini-transcribe"
-# "inherit_local" uses [transcription].language when it is not "auto"; "force" uses the value below
-language_mode = "inherit_local"
-# Language code used when language_mode = "force"
-language = ""
-
-[cloud.rewrite]
-# Cloud rewrite model
-model = "gpt-4.1-mini"
-# Sampling temperature for cloud rewrite
-temperature = 0.1
-# Maximum tokens requested from the cloud rewrite model
-max_output_tokens = 256
-
-[feedback]
-# Play sound feedback on start/stop
-enabled = true
-# Custom sound file paths (empty = use bundled sounds)
-start_sound = ""
-stop_sound = ""
+# "managed" uses the checksum-pinned llama.cpp runtime from setup.
+command = "managed"
+model = "Qwen_Qwen3.5-4B-Q4_K_M.gguf"
+timeout_ms = 10000

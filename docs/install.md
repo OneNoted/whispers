@@ -1,113 +1,82 @@
 # Install
 
-`whispers` targets Linux Wayland desktops and supports a few different installation paths depending on whether you want stable release bundles, the latest `main` branch, local rewrite, or CUDA.
+Whispers targets Linux x86_64 Wayland sessions. The Rust build is deliberately small;
+inference engines and models are installed at runtime instead of compiled into
+the application.
 
-## Requirements
+## System requirements
 
-- Linux with Wayland
-- `wl-copy` (usually provided by `wl-clipboard`)
-- Access to `/dev/uinput` for paste injection
-- Rust 1.85+ for Cargo installs and source builds
-- CUDA toolkit only when you build with the `cuda` feature yourself
+- PipeWire tools (`pw-cat` and `pw-play`)
+- `wtype`
+- `wl-copy` from `wl-clipboard`
+- `curl`, `tar`, `bzip2`, and `sha256sum` for setup
+- `notify-send` for optional notifications
+- Rust 1.85 or newer when building from source
 
-If `/dev/uinput` is not ready, run `whispers setup`. It can configure the dedicated `uinput` group and matching `udev` rule automatically.
+The managed assets require about 3.5 GB of download bandwidth and somewhat more
+installed space. Dictation itself does not require network access.
 
-## Arch Linux (`paru`)
-
-### Portable / non-CUDA
+## Arch Linux
 
 ```sh
-# published GitHub release bundle
-paru -S whispers-bin
-
-# latest main branch build
 paru -S whispers-git
+whispers setup
 ```
 
-### CUDA-enabled
+The AUR package builds only the control plane. Setup installs pinned inference
+artifacts under `${XDG_DATA_HOME:-~/.local/share}/whispers`.
+
+## From source
 
 ```sh
-# published GitHub release bundle with CUDA support
-paru -S whispers-cuda-bin
-
-# latest main branch build with CUDA support
-paru -S whispers-cuda-git
+cargo build --release --locked
+install -Dm755 target/release/whispers ~/.local/bin/whispers
+whispers setup
 ```
 
-### Package matrix
+There are no feature combinations or CUDA-specific application builds. GPU
+acceleration belongs to the independently managed runtime layer rather than the
+Whispers compile graph.
 
-| Package | Source | Feature set |
-| --- | --- | --- |
-| `whispers-bin` | Published GitHub release bundle | `local-rewrite,osd` |
-| `whispers-git` | Latest `main` branch build | `local-rewrite,osd` |
-| `whispers-cuda-bin` | Published GitHub CUDA release bundle | `cuda,local-rewrite,osd` |
-| `whispers-cuda-git` | Latest `main` branch build with CUDA | `cuda,local-rewrite,osd` |
+## Setup choices
 
-## Cargo
-
-### crates.io
-
-```sh
-# default install (OSD enabled)
-cargo install whispers
-
-# add local rewrite support
-cargo install whispers --features local-rewrite
-
-# add CUDA + local rewrite
-cargo install whispers --features cuda,local-rewrite
-
-# no OSD
-cargo install whispers --no-default-features
-```
-
-### GitHub source install
-
-If you want the current repository version instead of the latest crates.io publish:
-
-```sh
-cargo install --git https://github.com/OneNoted/whispers --features local-rewrite
-```
-
-## After install
-
-Generate a config, download an ASR model, and walk through optional rewrite/cloud setup:
+Normal network setup:
 
 ```sh
 whispers setup
 ```
 
-Default config path:
+Install without enabling the user service:
+
+```sh
+whispers setup --no-service
+```
+
+For an offline machine, prepare a directory with this shape and pass it as a
+runtime pack:
 
 ```text
-~/.config/whispers/config.toml
+pack/
+├── models/nemotron-3.5-asr-streaming-0.6b-560ms-int8/
+├── rewrite/Qwen_Qwen3.5-4B-Q4_K_M.gguf
+└── runtimes/
+    ├── llama.cpp/current/
+    └── sherpa-onnx/current/
 ```
 
-Canonical example config:
-
-- [config.example.toml](../config.example.toml)
-
-## Shell completions
-
-The Arch packages install completions in each shell's native system location.
-Release bundles contain the same files under `share/` for installation into a
-system prefix. Fish discovers the installed
-`/usr/share/fish/vendor_completions.d/whispers.fish` automatically; open a new
-fish session after installing or upgrading the package.
-
-Cargo deliberately has no post-install hook, so `cargo install` cannot safely
-write into a shell configuration directory. For a Cargo install, fish needs this
-one-time user-level installation:
-
-```fish
-mkdir -p ~/.config/fish/completions
-whispers completions fish > ~/.config/fish/completions/whispers.fish
+```sh
+whispers setup --runtime-pack ./pack
 ```
 
-Fish loads that file automatically in future sessions. The same command can
-print scripts for Bash, Zsh, and Nushell when you need to install them manually.
+Setup writes configuration version 2, imports the old dictionary and technical
+glossary when present, and copies the old configuration to a timestamped backup.
+It never deletes legacy models or configuration.
 
-## Keybinding examples
+## Service and keybinding
+
+Setup installs and starts a systemd user service when available. Toggle also
+autostarts the daemon, so the systemd service is convenient rather than
+mandatory.
 
 Hyprland:
 
@@ -115,14 +84,8 @@ Hyprland:
 bind = SUPER ALT, D, exec, whispers
 ```
 
-Sway:
+Niri:
 
-```conf
-bindsym $mod+Alt+d exec whispers
+```kdl
+Mod+Alt+D { spawn "whispers"; }
 ```
-
-The first invocation starts recording. The next invocation stops recording, transcribes, and pastes into the currently focused app.
-
-## Release bundles
-
-Tagged releases publish portable and CUDA-enabled Linux x86_64 tarballs. The AUR `*-bin` packages install those published release artifacts rather than building from source on your machine.

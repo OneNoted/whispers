@@ -1,0 +1,10 @@
+[Unit]
+Description=Whispers local dictation service
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/whispers daemon
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
