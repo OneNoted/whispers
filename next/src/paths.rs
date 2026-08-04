@@ -22,6 +22,10 @@ pub fn control_socket() -> Result<PathBuf> {
     runtime_dir().map(|path| path.join("control.sock"))
 }
 
+pub fn vocabulary() -> Result<PathBuf> {
+    data_dir().map(|path| path.join("vocabulary.toml"))
+}
+
 pub fn recognition_model_dir(model: &str) -> Result<PathBuf> {
     if let Some(path) = env::var_os("WHISPERS_MODEL_DIR") {
         return Ok(PathBuf::from(path));
@@ -39,12 +43,27 @@ pub fn sherpa_library() -> Result<PathBuf> {
     })
 }
 
+pub fn llama_server() -> Result<PathBuf> {
+    if let Some(path) = env::var_os("WHISPERS_LLAMA_SERVER") {
+        return Ok(PathBuf::from(path));
+    }
+    data_dir().map(|path| path.join("runtimes/llama.cpp/current/llama-server"))
+}
+
 pub fn fallback_model(model: &str) -> Result<PathBuf> {
     let candidate = PathBuf::from(model);
     if candidate.is_absolute() {
         return Ok(candidate);
     }
     data_dir().map(|path| path.join(model))
+}
+
+pub fn enhancement_model(model: &str) -> Result<PathBuf> {
+    let candidate = PathBuf::from(model);
+    if candidate.is_absolute() {
+        return Ok(candidate);
+    }
+    data_dir().map(|path| path.join("rewrite").join(model))
 }
 
 fn xdg_path(variable: &str, fallback: &str) -> Result<PathBuf> {

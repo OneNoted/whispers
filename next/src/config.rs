@@ -96,9 +96,9 @@ impl Default for EnhancementConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            command: "llama-server".into(),
+            command: "managed".into(),
             model: "Qwen_Qwen3.5-4B-Q4_K_M.gguf".into(),
-            timeout_ms: 1_500,
+            timeout_ms: 10_000,
         }
     }
 }
@@ -132,5 +132,21 @@ impl Config {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    pub fn save(&self) -> Result<()> {
+        self.save_to(&Self::path()?)
+    }
+
+    pub fn save_to(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut temporary = path.as_os_str().to_os_string();
+        temporary.push(format!(".{}.tmp", std::process::id()));
+        let temporary = PathBuf::from(temporary);
+        fs::write(&temporary, toml::to_string_pretty(self)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
     }
 }

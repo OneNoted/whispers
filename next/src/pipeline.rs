@@ -10,13 +10,16 @@ use crate::audio::{self, PipewireRecording};
 use crate::config::Config;
 use crate::desktop::{self, Focus};
 use crate::engine::EngineClient;
+use crate::enhance::Enhancer;
 use crate::normalize::normalize_spoken_text;
 use crate::service::{ActiveDictation, CompletedDictation, Pipeline};
+use crate::vocabulary::Vocabulary;
 use crate::{Error, Result, paths};
 
 pub struct LocalPipeline {
     config: Config,
     engine: Arc<Mutex<Option<EngineClient>>>,
+    enhancer: Arc<Enhancer>,
     next_session: AtomicU64,
 }
 
@@ -27,18 +30,23 @@ struct LocalDictation {
     target: Option<Focus>,
     config: Config,
     streaming: bool,
+    vocabulary: Vocabulary,
+    enhancer: Arc<Enhancer>,
 }
 
 impl LocalPipeline {
     pub fn new(config: Config) -> Self {
+        let enhancer = Enhancer::new(config.enhancement.clone());
+        enhancer.prewarm();
         Self {
             config,
             engine: Arc::new(Mutex::new(None)),
+            enhancer,
             next_session: AtomicU64::new(1),
         }
     }
 
-    fn start_engine(&self) -> bool {
+    fn start_engine(&self, vocabulary: &[String]) -> bool {
         let Ok(mut engine) = self.engine.lock() else {
             return false;
         };
@@ -52,7 +60,7 @@ impl LocalPipeline {
             .start(
                 self.next_session.fetch_add(1, Ordering::Relaxed),
                 &self.config.language,
-                Vec::new(),
+                vocabulary.to_vec(),
             )
             .is_ok()
     }
@@ -64,7 +72,8 @@ impl Pipeline for LocalPipeline {
             desktop::play_cue("start");
         }
         let target = desktop::capture_focus();
-        let streaming = self.start_engine();
+        let vocabulary = Vocabulary::load()?;
+        let streaming = self.start_engine(&vocabulary.terms());
         let (recording, receiver) = PipewireRecording::start(&self.config.audio.device)?;
         let engine = Arc::clone(&self.engine);
         let feeder = thread::spawn(move || {
@@ -88,6 +97,8 @@ impl Pipeline for LocalPipeline {
             target,
             config: self.config.clone(),
             streaming,
+            vocabulary,
+            enhancer: Arc::clone(&self.enhancer),
         }))
     }
 
@@ -126,8 +137,14 @@ impl ActiveDictation for LocalDictation {
         } else {
             transcribe_with_whisper(&self.config, &samples)?
         };
+        let personalized = self.vocabulary.apply(&transcript);
+        let normalized = normalize_spoken_text(&personalized);
+        let enhanced = self.enhancer.enhance(&normalized).unwrap_or_else(|error| {
+            eprintln!("whispers: enhancement unavailable, using deterministic text: {error}");
+            normalized
+        });
         Ok(CompletedDictation {
-            text: normalize_spoken_text(&transcript),
+            text: enhanced,
             target: self.target.map(|focus| focus.identity),
         })
     }

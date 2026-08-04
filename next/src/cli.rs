@@ -10,11 +10,16 @@ pub enum Command {
     Toggle,
     Cancel,
     Status,
-    Setup { offline_pack: Option<PathBuf> },
+    Setup {
+        offline_pack: Option<PathBuf>,
+        no_service: bool,
+    },
     Doctor,
     Vocabulary(VocabularyCommand),
     Daemon,
-    EngineHost { runtime: String },
+    EngineHost {
+        runtime: String,
+    },
     Help,
     Version,
 }
@@ -49,13 +54,18 @@ where
         }
         Value(value) if value == "setup" => {
             let mut offline_pack = None;
+            let mut no_service = false;
             while let Some(argument) = parser.next()? {
                 match argument {
                     Long("runtime-pack") => offline_pack = Some(parser.value()?.into()),
+                    Long("no-service") => no_service = true,
                     _ => return Err(argument.unexpected().into()),
                 }
             }
-            Command::Setup { offline_pack }
+            Command::Setup {
+                offline_pack,
+                no_service,
+            }
         }
         Value(value) if value == "vocabulary" => parse_vocabulary(&mut parser)?,
         Value(value) => {
@@ -111,7 +121,7 @@ Usage:
   whispers toggle                  Start or stop dictation
   whispers cancel                  Cancel the active dictation
   whispers status                  Show service state
-  whispers setup [--runtime-pack PATH]
+  whispers setup [--runtime-pack DIR] [--no-service]
   whispers doctor
   whispers vocabulary list
   whispers vocabulary add TERM --alias SPOKEN [--alias SPOKEN ...]
