@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::EnhancementConfig;
 use crate::{Error, Result, paths};
 
-const SYSTEM_PROMPT: &str = "Convert this speech transcript into the text the speaker intended to type. Correct recognition mistakes and light grammar only. Preserve meaning, names, numbers, code identifiers, symbols, URLs, line breaks, and deliberate informality. Return only the corrected text without quotes, commentary, or markdown.";
+const SYSTEM_PROMPT: &str = "Convert this speech transcript into the text the speaker intended to type. Correct only obvious recognition mistakes, punctuation, and light grammar. Do not paraphrase or replace valid word choices for style. Preserve meaning, names, numbers, code identifiers, symbols, URLs, line breaks, and deliberate informality. If a correction is uncertain, keep the original wording. Return only the corrected text without quotes, commentary, or markdown.";
 
 pub struct Enhancer {
     config: EnhancementConfig,
@@ -312,6 +312,17 @@ fn validate_output(input: &str, output: &str) -> Result<String> {
             "enhancement changed protected line structure",
         ));
     }
+    let (changes, input_words) = lexical_edit_distance(input, output);
+    let change_budget = if input_words <= 2 {
+        0
+    } else {
+        1_usize.saturating_add(input_words / 12)
+    };
+    if changes > change_budget {
+        return Err(Error::message(format!(
+            "enhancement changed too many words ({changes}, limit {change_budget})"
+        )));
+    }
     for number in digit_runs(input) {
         if !output.contains(number) {
             return Err(Error::message(format!(
@@ -320,6 +331,33 @@ fn validate_output(input: &str, output: &str) -> Result<String> {
         }
     }
     Ok(output.to_string())
+}
+
+fn lexical_edit_distance(input: &str, output: &str) -> (usize, usize) {
+    let input = lexical_words(input);
+    let output = lexical_words(output);
+    let mut previous = (0..=output.len()).collect::<Vec<_>>();
+    let mut current = vec![0; output.len() + 1];
+    for (input_index, input_word) in input.iter().enumerate() {
+        current[0] = input_index + 1;
+        for (output_index, output_word) in output.iter().enumerate() {
+            let substitution = usize::from(input_word != output_word);
+            current[output_index + 1] = (previous[output_index + 1] + 1)
+                .min(current[output_index] + 1)
+                .min(previous[output_index] + substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    (previous[output.len()], input.len())
+}
+
+fn lexical_words(input: &str) -> Vec<String> {
+    input
+        .split_whitespace()
+        .map(|word| word.trim_matches(|character: char| !character.is_alphanumeric()))
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 fn strip_outer_quotes(input: &str) -> &str {
@@ -366,6 +404,32 @@ mod tests {
         assert!(validate_output("version 3.2", "version 4.0").is_err());
         assert!(validate_output("x+y", "x plus y").is_err());
         assert!(validate_output("first\nsecond", "first second").is_err());
+        assert!(validate_output("accurate", "Accura").is_err());
+        assert_eq!(
+            validate_output("that result is accurate", "That result is accurate.")
+                .ok()
+                .as_deref(),
+            Some("That result is accurate.")
+        );
+        assert!(
+            validate_output(
+                "keep every ordinary word in this sentence exactly as spoken",
+                "replace most of the sentence with a different polished thought"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn counts_only_lexical_changes() {
+        assert_eq!(
+            lexical_edit_distance(
+                "For example it said Accura instead of accurate",
+                "For example, it said ‘Accura’ instead of ‘accurate’."
+            ),
+            (0, 8)
+        );
+        assert_eq!(lexical_edit_distance("one two three", "one four"), (2, 3));
     }
 
     #[test]
