@@ -22,6 +22,31 @@ pub fn control_socket() -> Result<PathBuf> {
     runtime_dir().map(|path| path.join("control.sock"))
 }
 
+pub fn recognition_model_dir(model: &str) -> Result<PathBuf> {
+    if let Some(path) = env::var_os("WHISPERS_MODEL_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    data_dir().map(|path| path.join("models").join(model))
+}
+
+pub fn sherpa_library() -> Result<PathBuf> {
+    if let Some(path) = env::var_os("WHISPERS_SHERPA_LIBRARY") {
+        return Ok(PathBuf::from(path));
+    }
+    data_dir().map(|path| {
+        path.join("runtimes/sherpa-onnx/current/lib")
+            .join("libsherpa-onnx-c-api.so")
+    })
+}
+
+pub fn fallback_model(model: &str) -> Result<PathBuf> {
+    let candidate = PathBuf::from(model);
+    if candidate.is_absolute() {
+        return Ok(candidate);
+    }
+    data_dir().map(|path| path.join(model))
+}
+
 fn xdg_path(variable: &str, fallback: &str) -> Result<PathBuf> {
     if let Some(path) = env::var_os(variable) {
         return Ok(PathBuf::from(path));

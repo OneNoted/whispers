@@ -25,13 +25,19 @@ impl PublicState {
 }
 
 pub trait ActiveDictation: Send {
-    fn finish(self: Box<Self>, cancelled: &AtomicBool) -> Result<String>;
+    fn finish(self: Box<Self>, cancelled: &AtomicBool) -> Result<CompletedDictation>;
     fn cancel(self: Box<Self>) -> Result<()>;
 }
 
 pub trait Pipeline: Send + Sync + 'static {
     fn start(&self) -> Result<Box<dyn ActiveDictation>>;
-    fn deliver(&self, text: &str) -> Result<()>;
+    fn deliver(&self, dictation: &CompletedDictation) -> Result<()>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletedDictation {
+    pub text: String,
+    pub target: Option<String>,
 }
 
 enum State {
@@ -140,8 +146,8 @@ impl<P: Pipeline> Service<P> {
                 service.set_idle();
                 return;
             }
-            let text = match result {
-                Ok(text) if !text.trim().is_empty() => text,
+            let dictation = match result {
+                Ok(dictation) if !dictation.text.trim().is_empty() => dictation,
                 Ok(_) => {
                     service.set_idle();
                     return;
@@ -156,7 +162,7 @@ impl<P: Pipeline> Service<P> {
                 *state = State::Delivering(Arc::clone(&cancelled));
             }
             if !cancelled.load(Ordering::Acquire) {
-                if let Err(error) = service.pipeline.deliver(&text) {
+                if let Err(error) = service.pipeline.deliver(&dictation) {
                     eprintln!("whispers: delivery failed: {error}");
                 }
             }
@@ -204,8 +210,11 @@ mod tests {
     struct FakeDictation;
 
     impl ActiveDictation for FakeDictation {
-        fn finish(self: Box<Self>, _cancelled: &AtomicBool) -> Result<String> {
-            Ok("this/that".into())
+        fn finish(self: Box<Self>, _cancelled: &AtomicBool) -> Result<CompletedDictation> {
+            Ok(CompletedDictation {
+                text: "this/that".into(),
+                target: None,
+            })
         }
 
         fn cancel(self: Box<Self>) -> Result<()> {
@@ -219,11 +228,11 @@ mod tests {
             Ok(Box::new(FakeDictation))
         }
 
-        fn deliver(&self, text: &str) -> Result<()> {
+        fn deliver(&self, dictation: &CompletedDictation) -> Result<()> {
             self.delivered
                 .lock()
                 .map_err(|_| Error::message("test lock poisoned"))?
-                .push(text.into());
+                .push(dictation.text.clone());
             Ok(())
         }
     }
