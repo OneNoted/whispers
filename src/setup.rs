@@ -29,6 +29,17 @@ pub struct SetupReport {
     pub service_started: bool,
 }
 
+struct ConfigMigration {
+    migrated: bool,
+    legacy_vocabulary: Option<LegacyVocabularyPaths>,
+    backup: Option<PathBuf>,
+}
+
+struct LegacyVocabularyPaths {
+    dictionary: PathBuf,
+    glossary: PathBuf,
+}
+
 pub fn run(offline_pack: Option<&Path>, install_service: bool) -> Result<SetupReport> {
     if std::env::consts::OS != "linux" || std::env::consts::ARCH != "x86_64" {
         return Err(Error::message(
@@ -37,36 +48,78 @@ pub fn run(offline_pack: Option<&Path>, install_service: bool) -> Result<SetupRe
     }
     let data_dir = paths::data_dir()?;
     fs::create_dir_all(&data_dir)?;
-    let migrated_config = migrate_config(&Config::path()?, &data_dir)?;
-    let vocabulary_entries = migrate_vocabulary(&data_dir)?;
+    let config_path = Config::path()?;
+    let migration = migrate_config(&config_path, &data_dir)?;
+    let vocabulary_entries = match migrate_vocabulary(
+        &data_dir,
+        migration.legacy_vocabulary.as_ref(),
+    ) {
+        Ok(entries) => entries,
+        Err(error) => {
+            if let Some(backup) = &migration.backup {
+                fs::copy(backup, &config_path).map_err(|restore_error| {
+                        Error::message(format!(
+                            "{error}; additionally could not restore legacy configuration: {restore_error}"
+                        ))
+                    })?;
+            }
+            return Err(error);
+        }
+    };
+    let config = Config::load(None)?;
     if let Some(pack) = offline_pack {
-        install_from_pack(pack, &data_dir)?;
+        install_from_pack(pack, &data_dir, config.enhancement.enabled)?;
     } else {
-        install_from_network(&data_dir)?;
+        install_from_network(&data_dir, config.enhancement.enabled)?;
     }
-    validate_installation(&data_dir)?;
+    validate_asr_installation(&data_dir)?;
+    if config.enhancement.enabled {
+        validate_enhancement_installation(&data_dir)?;
+    }
     let service_started = install_service && install_user_service()?;
     Ok(SetupReport {
-        migrated_config,
+        migrated_config: migration.migrated,
         vocabulary_entries,
         service_started,
     })
 }
 
-fn migrate_config(path: &Path, data_dir: &Path) -> Result<bool> {
+fn migrate_config(path: &Path, data_dir: &Path) -> Result<ConfigMigration> {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Config::default().save_to(path)?;
-            return Ok(false);
+            return Ok(ConfigMigration {
+                migrated: false,
+                legacy_vocabulary: None,
+                backup: None,
+            });
         }
         Err(error) => return Err(error.into()),
     };
     let value: toml::Value = toml::from_str(&contents)?;
     if value.get("version").and_then(toml::Value::as_integer) == Some(i64::from(CONFIG_VERSION)) {
         Config::load(Some(path))?;
-        return Ok(false);
+        return Ok(ConfigMigration {
+            migrated: false,
+            legacy_vocabulary: None,
+            backup: None,
+        });
     }
+
+    let dictionary = value_at(&value, &["personalization", "dictionary_path"])
+        .filter(|path| !path.is_empty())
+        .map_or_else(
+            || legacy_data_path(data_dir, "dictionary.toml"),
+            expand_home,
+        );
+    let glossary = value_at(&value, &["rewrite", "glossary_path"])
+        .or_else(|| value_at(&value, &["agentic_rewrite", "glossary_path"]))
+        .filter(|path| !path.is_empty())
+        .map_or_else(
+            || legacy_data_path(data_dir, "technical-glossary.toml"),
+            expand_home,
+        );
 
     let backup = backup_path(path);
     fs::copy(path, &backup)?;
@@ -100,14 +153,26 @@ fn migrate_config(path: &Path, data_dir: &Path) -> Result<bool> {
             .map_err(|_| Error::message("rewrite timeout is invalid"))?;
     }
     config.save_to(path)?;
-    Ok(true)
+    Ok(ConfigMigration {
+        migrated: true,
+        legacy_vocabulary: Some(LegacyVocabularyPaths {
+            dictionary,
+            glossary,
+        }),
+        backup: Some(backup),
+    })
 }
 
-fn migrate_vocabulary(data_dir: &Path) -> Result<usize> {
+fn migrate_vocabulary(
+    data_dir: &Path,
+    legacy_paths: Option<&LegacyVocabularyPaths>,
+) -> Result<usize> {
     let target = data_dir.join("vocabulary.toml");
     let mut vocabulary = Vocabulary::load_from(&target)?;
-    import_dictionary(&data_dir.join("dictionary.toml"), &mut vocabulary)?;
-    import_glossary(&data_dir.join("technical-glossary.toml"), &mut vocabulary)?;
+    if let Some(paths) = legacy_paths {
+        import_dictionary(&paths.dictionary, &mut vocabulary)?;
+        import_glossary(&paths.glossary, &mut vocabulary)?;
+    }
     vocabulary.save_to(&target)?;
     Ok(vocabulary.entries.len())
 }
@@ -161,7 +226,7 @@ fn import_glossary(path: &Path, vocabulary: &mut Vocabulary) -> Result<()> {
     Ok(())
 }
 
-fn install_from_network(data_dir: &Path) -> Result<()> {
+fn install_from_network(data_dir: &Path, install_enhancement: bool) -> Result<()> {
     let downloads = data_dir.join("downloads");
     fs::create_dir_all(&downloads)?;
     install_archive(
@@ -188,24 +253,26 @@ fn install_from_network(data_dir: &Path) -> Result<()> {
         &downloads,
         &data_dir.join("models").join(MODEL_NAME),
     )?;
-    install_archive(
-        Asset {
-            name: "llama-runtime",
-            extension: "tar.gz",
-            extract_flag: "-xzf",
-            url: LLAMA_URL,
-            sha256: LLAMA_SHA256,
-            archive_root: LLAMA_ROOT,
-        },
-        &downloads,
-        &data_dir.join("runtimes/llama.cpp/current"),
-    )?;
-    install_file(
-        ENHANCEMENT_URL,
-        ENHANCEMENT_SHA256,
-        &downloads.join("enhancement-model.gguf"),
-        &data_dir.join("rewrite").join(ENHANCEMENT_FILE),
-    )?;
+    if install_enhancement {
+        install_archive(
+            Asset {
+                name: "llama-runtime",
+                extension: "tar.gz",
+                extract_flag: "-xzf",
+                url: LLAMA_URL,
+                sha256: LLAMA_SHA256,
+                archive_root: LLAMA_ROOT,
+            },
+            &downloads,
+            &data_dir.join("runtimes/llama.cpp/current"),
+        )?;
+        install_file(
+            ENHANCEMENT_URL,
+            ENHANCEMENT_SHA256,
+            &downloads.join("enhancement-model.gguf"),
+            &data_dir.join("rewrite").join(ENHANCEMENT_FILE),
+        )?;
+    }
     Ok(())
 }
 
@@ -273,7 +340,7 @@ fn install_file(url: &str, sha256: &str, download: &Path, target: &Path) -> Resu
     Ok(())
 }
 
-fn install_from_pack(pack: &Path, data_dir: &Path) -> Result<()> {
+fn install_from_pack(pack: &Path, data_dir: &Path, install_enhancement: bool) -> Result<()> {
     if !pack.is_dir() {
         return Err(Error::message(
             "--runtime-pack must name an unpacked runtime directory",
@@ -287,14 +354,17 @@ fn install_from_pack(pack: &Path, data_dir: &Path) -> Result<()> {
         &pack.join("models").join(MODEL_NAME),
         &data_dir.join("models").join(MODEL_NAME),
     )?;
-    copy_install(
-        &pack.join("runtimes/llama.cpp/current"),
-        &data_dir.join("runtimes/llama.cpp/current"),
-    )?;
-    copy_file_install(
-        &pack.join("rewrite").join(ENHANCEMENT_FILE),
-        &data_dir.join("rewrite").join(ENHANCEMENT_FILE),
-    )
+    if install_enhancement {
+        copy_install(
+            &pack.join("runtimes/llama.cpp/current"),
+            &data_dir.join("runtimes/llama.cpp/current"),
+        )?;
+        copy_file_install(
+            &pack.join("rewrite").join(ENHANCEMENT_FILE),
+            &data_dir.join("rewrite").join(ENHANCEMENT_FILE),
+        )?;
+    }
+    Ok(())
 }
 
 fn copy_file_install(source: &Path, target: &Path) -> Result<()> {
@@ -359,7 +429,7 @@ fn copy_directory(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_installation(data_dir: &Path) -> Result<()> {
+pub fn validate_asr_installation(data_dir: &Path) -> Result<()> {
     let required = [
         data_dir.join("runtimes/sherpa-onnx/current/lib/libsherpa-onnx-c-api.so"),
         data_dir
@@ -375,8 +445,6 @@ pub fn validate_installation(data_dir: &Path) -> Result<()> {
             .join(MODEL_NAME)
             .join("joiner.int8.onnx"),
         data_dir.join("models").join(MODEL_NAME).join("tokens.txt"),
-        data_dir.join("runtimes/llama.cpp/current/llama-server"),
-        data_dir.join("rewrite").join(ENHANCEMENT_FILE),
     ];
     for path in required {
         if !path.is_file() {
@@ -387,6 +455,26 @@ pub fn validate_installation(data_dir: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn validate_enhancement_installation(data_dir: &Path) -> Result<()> {
+    for path in [
+        data_dir.join("runtimes/llama.cpp/current/llama-server"),
+        data_dir.join("rewrite").join(ENHANCEMENT_FILE),
+    ] {
+        if !path.is_file() {
+            return Err(Error::message(format!(
+                "enhancement installation is incomplete: {} is missing",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_installation(data_dir: &Path) -> Result<()> {
+    validate_asr_installation(data_dir)?;
+    validate_enhancement_installation(data_dir)
 }
 
 fn install_user_service() -> Result<bool> {
@@ -552,6 +640,13 @@ fn expand_home(path: &str) -> PathBuf {
     )
 }
 
+fn legacy_data_path(data_dir: &Path, name: &str) -> PathBuf {
+    std::env::var_os("HOME").map_or_else(
+        || data_dir.join(name),
+        |home| PathBuf::from(home).join(".local/share/whispers").join(name),
+    )
+}
+
 fn backup_path(path: &Path) -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -579,7 +674,8 @@ mod tests {
             )
             .is_ok()
         );
-        assert_eq!(migrate_config(&config, &data).ok(), Some(true));
+        let migration = migrate_config(&config, &data);
+        assert!(migration.is_ok_and(|migration| migration.migrated));
         let migrated = Config::load(Some(&config));
         assert!(migrated.is_ok());
         let migrated = migrated.unwrap_or_default();
@@ -628,13 +724,70 @@ mod tests {
             )
             .is_ok()
         );
-        assert_eq!(migrate_vocabulary(&root).ok(), Some(2));
+        let paths = LegacyVocabularyPaths {
+            dictionary: root.join("dictionary.toml"),
+            glossary: root.join("technical-glossary.toml"),
+        };
+        assert_eq!(migrate_vocabulary(&root, Some(&paths)).ok(), Some(2));
         let vocabulary = Vocabulary::load_from(&root.join("vocabulary.toml"));
         assert!(vocabulary.is_ok_and(|vocabulary| {
             vocabulary.apply("seashell and chasse-moi") == "zsh and chezmoi"
         }));
         assert!(root.join("dictionary.toml").is_file());
         assert!(root.join("technical-glossary.toml").is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn imports_custom_legacy_paths_only_during_migration() {
+        let root = std::env::temp_dir().join(format!(
+            "whispers-custom-vocabulary-migration-test-{}",
+            std::process::id()
+        ));
+        let config = root.join("config.toml");
+        let data = root.join("data");
+        let custom = root.join("custom");
+        let _ = fs::remove_dir_all(&root);
+        assert!(fs::create_dir_all(&custom).is_ok());
+        assert!(
+            fs::write(
+                custom.join("dictionary.toml"),
+                "[[entries]]\nphrase = \"seashell\"\nreplace = \"zsh\"\n"
+            )
+            .is_ok()
+        );
+        assert!(
+            fs::write(
+                &config,
+                format!(
+                    "[personalization]\ndictionary_path = {:?}\n[rewrite]\nglossary_path = {:?}\n",
+                    custom.join("dictionary.toml").to_string_lossy(),
+                    custom.join("glossary.toml").to_string_lossy()
+                )
+            )
+            .is_ok()
+        );
+        let migration = migrate_config(&config, &data);
+        assert!(migration.is_ok());
+        let Some(migration) = migration.ok() else {
+            return;
+        };
+        assert_eq!(
+            migrate_vocabulary(&data, migration.legacy_vocabulary.as_ref()).ok(),
+            Some(1)
+        );
+        let vocabulary = Vocabulary::load_from(&data.join("vocabulary.toml"));
+        assert!(vocabulary.is_ok());
+        let Some(mut vocabulary) = vocabulary.ok() else {
+            return;
+        };
+        assert!(vocabulary.remove("zsh"));
+        assert!(vocabulary.save_to(&data.join("vocabulary.toml")).is_ok());
+        assert_eq!(migrate_vocabulary(&data, None).ok(), Some(0));
+        assert!(
+            Vocabulary::load_from(&data.join("vocabulary.toml"))
+                .is_ok_and(|vocabulary| vocabulary.entries.is_empty())
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

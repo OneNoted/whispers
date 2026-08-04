@@ -38,7 +38,6 @@ pub enum EngineRequest {
         session_id: u64,
         sample_rate: u32,
         language: String,
-        vocabulary: Vec<String>,
     },
     Finish,
     Cancel,

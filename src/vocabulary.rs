@@ -111,13 +111,6 @@ impl Vocabulary {
         self.entries.len() != previous
     }
 
-    pub fn terms(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .map(|entry| entry.term.clone())
-            .collect()
-    }
-
     pub fn apply(&self, input: &str) -> String {
         let mut replacements = self
             .entries
@@ -130,27 +123,23 @@ impl Vocabulary {
             })
             .collect::<Vec<_>>();
         replacements.sort_by_key(|(alias, _)| std::cmp::Reverse(alias.len()));
-        replacements
-            .into_iter()
-            .fold(input.to_string(), |text, item| {
-                replace_phrase(&text, item.0, item.1)
-            })
+        replace_phrases(input, &replacements)
     }
 }
 
-fn replace_phrase(input: &str, phrase: &str, replacement: &str) -> String {
-    if phrase.is_empty() || phrase.len() > input.len() {
-        return input.to_string();
-    }
+fn replace_phrases(input: &str, replacements: &[(&str, &str)]) -> String {
     let mut output = String::with_capacity(input.len());
     let mut cursor = 0;
     while cursor < input.len() {
-        let matched = cursor + phrase.len() <= input.len()
-            && input.is_char_boundary(cursor + phrase.len())
-            && input[cursor..cursor + phrase.len()].eq_ignore_ascii_case(phrase)
-            && boundary_before(input, cursor)
-            && boundary_after(input, cursor + phrase.len());
-        if matched {
+        let replacement = replacements.iter().find(|(phrase, _)| {
+            !phrase.is_empty()
+                && cursor + phrase.len() <= input.len()
+                && input.is_char_boundary(cursor + phrase.len())
+                && input[cursor..cursor + phrase.len()].eq_ignore_ascii_case(phrase)
+                && boundary_before(input, cursor)
+                && boundary_after(input, cursor + phrase.len())
+        });
+        if let Some((phrase, replacement)) = replacement {
             output.push_str(replacement);
             cursor += phrase.len();
         } else {
@@ -220,5 +209,23 @@ mod tests {
         );
         assert_eq!(vocabulary.entries.len(), 1);
         assert_eq!(vocabulary.entries[0].aliases.len(), 2);
+    }
+
+    #[test]
+    fn does_not_replace_inside_inserted_terms() {
+        let vocabulary = Vocabulary {
+            version: VOCABULARY_VERSION,
+            entries: vec![
+                VocabularyEntry {
+                    term: "TypeScript".into(),
+                    aliases: vec!["type script".into()],
+                },
+                VocabularyEntry {
+                    term: "TS".into(),
+                    aliases: vec!["TypeScript".into()],
+                },
+            ],
+        };
+        assert_eq!(vocabulary.apply("type script"), "TypeScript");
     }
 }

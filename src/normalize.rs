@@ -98,6 +98,21 @@ fn is_strong_symbol_context(words: &[&str], index: usize, consumed: usize, symbo
     if lexical_prefix {
         return false;
     }
+    let lexical_symbol_use = symbol == "/"
+        && (previous.is_some_and(|word| {
+            matches!(
+                clean_word(word).to_ascii_lowercase().as_str(),
+                "like" | "love" | "read" | "reading"
+            )
+        }) || next.is_some_and(|word| {
+            matches!(
+                clean_word(word).to_ascii_lowercase().as_str(),
+                "fiction" | "genre" | "command" | "character" | "symbol"
+            )
+        }));
+    if lexical_symbol_use {
+        return false;
+    }
     match symbol {
         "," | "." | ":" | ";" | "?" | "!" => previous.is_some(),
         "/" | "\\" | "_" | "|" | "&" | "*" | "+" | "=" | "#" | "-" => {
@@ -139,7 +154,7 @@ fn needs_space_before_word(output: &str) -> bool {
         !character.is_whitespace()
             && !matches!(
                 character,
-                '/' | '\\' | '_' | '-' | '@' | '#' | '(' | '[' | '{'
+                '/' | '\\' | '_' | '-' | '@' | '#' | '|' | '&' | '*' | '+' | '=' | '(' | '[' | '{'
             )
     })
 }
@@ -161,12 +176,23 @@ mod tests {
             "the word slash here"
         );
         assert_eq!(normalize_spoken_text("slash fiction"), "slash fiction");
+        assert_eq!(
+            normalize_spoken_text("I like slash fiction"),
+            "I like slash fiction"
+        );
     }
 
     #[test]
     fn explicit_literals_are_guaranteed() {
         assert_eq!(normalize_spoken_text("literal slash"), "/");
         assert_eq!(normalize_spoken_text("literal question mark"), "?");
+    }
+
+    #[test]
+    fn renders_operators_without_half_spacing() {
+        assert_eq!(normalize_spoken_text("x plus y"), "x+y");
+        assert_eq!(normalize_spoken_text("left equals right"), "left=right");
+        assert_eq!(normalize_spoken_text("one ampersand two"), "one&two");
     }
 
     #[test]

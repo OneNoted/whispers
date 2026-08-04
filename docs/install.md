@@ -34,9 +34,9 @@ install -Dm755 target/release/whispers ~/.local/bin/whispers
 whispers setup
 ```
 
-There are no feature combinations or CUDA-specific application builds. GPU
-acceleration belongs to the independently managed runtime layer rather than the
-Whispers compile graph.
+There are no feature combinations or CUDA-specific application builds. The
+current managed runtimes are CPU-only; a future GPU runtime can be shipped
+independently without returning ML toolchains to the Whispers compile graph.
 
 ## Setup choices
 

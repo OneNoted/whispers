@@ -307,12 +307,17 @@ fn validate_output(input: &str, output: &str) -> Result<String> {
             "enhancement expanded the transcript too much",
         ));
     }
-    for symbol in ['/', '\\', '@', '#', '|', '_'] {
+    for symbol in ['/', '\\', '@', '#', '|', '_', '&', '*', '+', '=', '-'] {
         if input.matches(symbol).count() > output.matches(symbol).count() {
             return Err(Error::message(format!(
                 "enhancement removed protected symbol {symbol}"
             )));
         }
+    }
+    if input.matches('\n').count() != output.matches('\n').count() {
+        return Err(Error::message(
+            "enhancement changed protected line structure",
+        ));
     }
     for number in digit_runs(input) {
         if !output.contains(number) {
@@ -366,6 +371,8 @@ mod tests {
         );
         assert!(validate_output("Use this/that", "Use this or that").is_err());
         assert!(validate_output("version 3.2", "version 4.0").is_err());
+        assert!(validate_output("x+y", "x plus y").is_err());
+        assert!(validate_output("first\nsecond", "first second").is_err());
     }
 
     #[test]

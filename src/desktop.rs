@@ -1,5 +1,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::{OnceLock, mpsc};
+use std::thread;
 
 use serde::{Deserialize, Serialize};
 
@@ -58,7 +60,12 @@ pub fn deliver(text: &str, target: Option<&str>) -> Result<()> {
         return Ok(());
     }
     copy_to_clipboard(text)?;
-    let terminal = capture_focus().is_some_and(|focus| is_terminal(&focus.app_id));
+    let current = capture_focus();
+    if target.is_some() && current.as_ref().map(|focus| focus.identity.as_str()) != target {
+        show_message("Dictation copied because focus changed");
+        return Ok(());
+    }
+    let terminal = current.is_some_and(|focus| is_terminal(&focus.app_id));
     let result = paste_with_wtype(terminal);
     if result.is_err() {
         show_message("Dictation is on the clipboard; automatic paste failed");
@@ -67,17 +74,27 @@ pub fn deliver(text: &str, target: Option<&str>) -> Result<()> {
 }
 
 fn notify(body: &str) {
-    let _ = Command::new("notify-send")
-        .args([
-            "--transient",
-            "--replace-id",
-            NOTIFICATION_ID,
-            "whispers",
-            body,
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    static NOTIFICATIONS: OnceLock<mpsc::SyncSender<String>> = OnceLock::new();
+    let sender = NOTIFICATIONS.get_or_init(|| {
+        let (sender, receiver) = mpsc::sync_channel::<String>(1);
+        thread::spawn(move || {
+            while let Ok(body) = receiver.recv() {
+                let _ = Command::new("notify-send")
+                    .args([
+                        "--transient",
+                        "--replace-id",
+                        NOTIFICATION_ID,
+                        "whispers",
+                        &body,
+                    ])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        });
+        sender
+    });
+    let _ = sender.try_send(body.to_string());
 }
 
 fn type_with_wtype(text: &str) -> Result<()> {

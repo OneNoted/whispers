@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Command, Stdio};
@@ -28,8 +28,20 @@ pub fn run() -> Result<()> {
     let _guard = SocketGuard(socket);
     let service = Service::new(LocalPipeline::new(Config::load(None)?));
     for connection in listener.incoming() {
-        let mut connection = connection?;
-        let request = read_request(&connection)?;
+        let mut connection = match connection {
+            Ok(connection) => connection,
+            Err(error) => {
+                eprintln!("whispers: rejected control connection: {error}");
+                continue;
+            }
+        };
+        let request = match read_request(&connection) {
+            Ok(request) => request,
+            Err(error) => {
+                eprintln!("whispers: ignored invalid control request: {error}");
+                continue;
+            }
+        };
         let shutdown = request == ControlRequest::Shutdown;
         let response = if shutdown {
             ControlResponse {
@@ -40,7 +52,9 @@ pub fn run() -> Result<()> {
         } else {
             service.handle(&request)
         };
-        write_response(&mut connection, &response)?;
+        if let Err(error) = write_response(&mut connection, &response) {
+            eprintln!("whispers: could not send control response: {error}");
+        }
         if shutdown {
             break;
         }
@@ -78,12 +92,17 @@ fn request_once(socket: &std::path::Path, request: &ControlRequest) -> Result<Co
     serde_json::to_writer(&mut stream, request)?;
     stream.write_all(b"\n")?;
     stream.flush()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    if line.is_empty() {
+    let mut payload = Vec::new();
+    BufReader::new(stream)
+        .take(64 * 1024 + 1)
+        .read_until(b'\n', &mut payload)?;
+    if payload.is_empty() {
         return Err(Error::message("service closed the control connection"));
     }
-    Ok(serde_json::from_str(&line)?)
+    if payload.len() > 64 * 1024 {
+        return Err(Error::message("control response is too large"));
+    }
+    Ok(serde_json::from_slice(&payload)?)
 }
 
 fn start_daemon() -> Result<()> {
@@ -98,12 +117,14 @@ fn start_daemon() -> Result<()> {
 }
 
 fn read_request(stream: &UnixStream) -> Result<ControlRequest> {
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    if line.len() > 64 * 1024 {
+    let mut payload = Vec::new();
+    BufReader::new(stream)
+        .take(64 * 1024 + 1)
+        .read_until(b'\n', &mut payload)?;
+    if payload.len() > 64 * 1024 {
         return Err(Error::message("control request is too large"));
     }
-    Ok(serde_json::from_str(&line)?)
+    Ok(serde_json::from_slice(&payload)?)
 }
 
 fn write_response(stream: &mut UnixStream, response: &ControlResponse) -> Result<()> {

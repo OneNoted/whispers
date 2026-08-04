@@ -53,12 +53,12 @@ pub fn run() -> Report {
             None
         }
     };
-    match paths::data_dir().and_then(|path| setup::validate_installation(&path)) {
+    match paths::data_dir().and_then(|path| setup::validate_asr_installation(&path)) {
         Ok(()) => checks.push(pass(
-            "managed runtimes",
-            "sherpa-onnx, Nemotron, and llama.cpp are installed",
+            "managed ASR",
+            "sherpa-onnx and Nemotron are installed",
         )),
-        Err(error) => checks.push(fail("managed runtimes", error.to_string())),
+        Err(error) => checks.push(fail("managed ASR", error.to_string())),
     }
     if let Ok(library) = paths::sherpa_library() {
         // SAFETY: Doctor only asks the dynamic loader to validate this pinned shared object.
@@ -115,24 +115,53 @@ pub fn run() -> Report {
             )),
             Err(error) => checks.push(warn("fallback model", error.to_string())),
         }
-        if config.enhancement.enabled {
-            match paths::enhancement_model(&config.enhancement.model) {
-                Ok(path) if path.is_file() => checks.push(pass(
-                    "enhancement model",
-                    format!("{} is available", path.display()),
-                )),
-                Ok(path) => checks.push(warn(
-                    "enhancement model",
-                    format!(
-                        "{} is missing; deterministic cleanup will remain available",
-                        path.display()
-                    ),
-                )),
-                Err(error) => checks.push(warn("enhancement model", error.to_string())),
-            }
-        }
+        enhancement_checks(&mut checks, &config);
     }
     Report { checks }
+}
+
+fn enhancement_checks(checks: &mut Vec<Check>, config: &Config) {
+    if !config.enhancement.enabled {
+        return;
+    }
+    let runtime = if config.enhancement.command.trim().is_empty()
+        || config.enhancement.command == "managed"
+    {
+        paths::llama_server().ok()
+    } else {
+        find_command(&config.enhancement.command)
+    };
+    match runtime {
+        Some(path) if executable(&path) => checks.push(pass(
+            "enhancement runtime",
+            format!("{} is available", path.display()),
+        )),
+        Some(path) => checks.push(warn(
+            "enhancement runtime",
+            format!(
+                "{} is missing or not executable; deterministic cleanup will remain available",
+                path.display()
+            ),
+        )),
+        None => checks.push(warn(
+            "enhancement runtime",
+            "configured runtime is unavailable; deterministic cleanup will remain available",
+        )),
+    }
+    match paths::enhancement_model(&config.enhancement.model) {
+        Ok(path) if path.is_file() => checks.push(pass(
+            "enhancement model",
+            format!("{} is available", path.display()),
+        )),
+        Ok(path) => checks.push(warn(
+            "enhancement model",
+            format!(
+                "{} is missing; deterministic cleanup will remain available",
+                path.display()
+            ),
+        )),
+        Err(error) => checks.push(warn("enhancement model", error.to_string())),
+    }
 }
 
 fn command_check(

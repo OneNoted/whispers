@@ -7,7 +7,7 @@ arch=('x86_64')
 url='https://github.com/OneNoted/whispers'
 license=('MIT')
 makedepends=('cargo' 'git')
-depends=('bzip2' 'curl' 'gcc-libs' 'glibc' 'pipewire' 'wl-clipboard' 'wtype')
+depends=('bzip2' 'curl' 'gcc-libs' 'glibc' 'pipewire-audio' 'wl-clipboard' 'wtype')
 optdepends=(
   'libnotify: desktop status notifications'
   'whisper.cpp: fallback transcription when the streaming runtime is unavailable'
@@ -19,9 +19,11 @@ sha256sums=('SKIP')
 
 pkgver() {
   cd "$srcdir/$_pkgname"
-  git describe --long --abbrev=7 --tags 2>/dev/null | \
-    sed 's/^v//; s/-/.r/; s/-/./g' || \
+  if git describe --long --abbrev=7 --tags >/dev/null 2>&1; then
+    git describe --long --abbrev=7 --tags | sed 's/^v//; s/-/.r/; s/-/./g'
+  else
     printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  fi
 }
 
 prepare() {

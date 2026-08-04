@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use crate::{Error, Result};
 
 pub const SAMPLE_RATE: u32 = 16_000;
+const MAX_RECORDING_SAMPLES: usize = SAMPLE_RATE as usize * 60 * 10;
 
 pub struct PipewireRecording {
     child: Child,
@@ -36,10 +37,11 @@ impl PipewireRecording {
         let mut child = command.spawn().map_err(|error| {
             Error::message(format!("could not start PipeWire capture: {error}"))
         })?;
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::message("pw-cat did not provide an audio stream"))?;
+        let Some(mut stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::message("pw-cat did not provide an audio stream"));
+        };
         let samples = Arc::new(Mutex::new(Vec::new()));
         let stored = Arc::clone(&samples);
         let (sender, receiver) = mpsc::channel();
@@ -62,10 +64,14 @@ impl PipewireRecording {
                     .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
                     .collect::<Vec<_>>();
                 pending.drain(..complete);
-                stored
+                let mut stored = stored
                     .lock()
-                    .map_err(|_| Error::message("audio buffer lock is poisoned"))?
-                    .extend_from_slice(&chunk);
+                    .map_err(|_| Error::message("audio buffer lock is poisoned"))?;
+                if stored.len().saturating_add(chunk.len()) > MAX_RECORDING_SAMPLES {
+                    return Err(Error::message("dictation exceeded the 10 minute limit"));
+                }
+                stored.extend_from_slice(&chunk);
+                drop(stored);
                 if sender
                     .as_ref()
                     .is_some_and(|sender| sender.send(chunk).is_err())
@@ -85,6 +91,14 @@ impl PipewireRecording {
         ))
     }
 
+    pub fn discard_buffered(&self) -> Result<()> {
+        self.samples
+            .lock()
+            .map_err(|_| Error::message("audio buffer lock is poisoned"))?
+            .clear();
+        Ok(())
+    }
+
     pub fn stop(mut self) -> Result<Vec<f32>> {
         self.stop_child()?;
         if let Some(reader) = self.reader.take() {
@@ -92,10 +106,10 @@ impl PipewireRecording {
                 .join()
                 .map_err(|_| Error::message("audio reader thread panicked"))??;
         }
-        Arc::try_unwrap(self.samples)
-            .map_err(|_| Error::message("audio buffer is still in use"))?
-            .into_inner()
+        self.samples
+            .lock()
             .map_err(|_| Error::message("audio buffer lock is poisoned"))
+            .map(|samples| samples.clone())
     }
 
     pub fn cancel(mut self) -> Result<()> {
@@ -113,6 +127,15 @@ impl PipewireRecording {
         self.child.kill()?;
         let _ = self.child.wait();
         Ok(())
+    }
+}
+
+impl Drop for PipewireRecording {
+    fn drop(&mut self) {
+        let _ = self.stop_child();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
 }
 

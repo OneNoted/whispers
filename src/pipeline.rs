@@ -46,7 +46,7 @@ impl LocalPipeline {
         }
     }
 
-    fn start_engine(&self, vocabulary: &[String]) -> bool {
+    fn start_engine(&self) -> bool {
         let Ok(mut engine) = self.engine.lock() else {
             return false;
         };
@@ -60,7 +60,6 @@ impl LocalPipeline {
             .start(
                 self.next_session.fetch_add(1, Ordering::Relaxed),
                 &self.config.language,
-                vocabulary.to_vec(),
             )
             .is_ok()
     }
@@ -68,13 +67,14 @@ impl LocalPipeline {
 
 impl Pipeline for LocalPipeline {
     fn start(&self) -> Result<Box<dyn ActiveDictation>> {
-        if self.config.audio.feedback {
-            desktop::play_cue("start");
-        }
         let target = desktop::capture_focus();
         let vocabulary = Vocabulary::load()?;
-        let streaming = self.start_engine(&vocabulary.terms());
         let (recording, receiver) = PipewireRecording::start(&self.config.audio.device)?;
+        // Capture begins before the potentially cold ASR handshake. The cue is only
+        // played after the engine is ready, so speech after the cue cannot be lost.
+        let streaming = self.start_engine();
+        recording.discard_buffered()?;
+        while receiver.try_recv().is_ok() {}
         let engine = Arc::clone(&self.engine);
         let feeder = thread::spawn(move || {
             while let Ok(samples) = receiver.recv() {
@@ -89,6 +89,9 @@ impl Pipeline for LocalPipeline {
                 }
             }
         });
+        if self.config.audio.feedback {
+            desktop::play_cue("start");
+        }
         desktop::show_listening();
         Ok(Box::new(LocalDictation {
             recording: Some(recording),
@@ -127,22 +130,46 @@ impl ActiveDictation for LocalDictation {
             });
         }
         let transcript = if self.streaming {
-            self.engine
-                .lock()
-                .map_err(|_| Error::message("engine lock is poisoned"))?
-                .as_mut()
-                .ok_or_else(|| Error::message("streaming engine disappeared"))?
-                .finish()
-                .or_else(|_| transcribe_with_whisper(&self.config, &samples))?
+            let streaming_result = {
+                let mut engine = self
+                    .engine
+                    .lock()
+                    .map_err(|_| Error::message("engine lock is poisoned"))?;
+                let result = engine
+                    .as_mut()
+                    .ok_or_else(|| Error::message("streaming engine disappeared"))?
+                    .finish();
+                if result.is_err() {
+                    // A late response must never be mistaken for the next session.
+                    *engine = None;
+                }
+                result
+            };
+            streaming_result.or_else(|error| {
+                eprintln!("whispers: streaming ASR failed, trying whisper-cli: {error}");
+                transcribe_with_whisper(&self.config, &samples)
+            })?
         } else {
             transcribe_with_whisper(&self.config, &samples)?
         };
+        if cancelled.load(Ordering::Acquire) {
+            return Ok(CompletedDictation {
+                text: String::new(),
+                target: None,
+            });
+        }
         let personalized = self.vocabulary.apply(&transcript);
         let normalized = normalize_spoken_text(&personalized);
         let enhanced = self.enhancer.enhance(&normalized).unwrap_or_else(|error| {
             eprintln!("whispers: enhancement unavailable, using deterministic text: {error}");
             normalized
         });
+        if cancelled.load(Ordering::Acquire) {
+            return Ok(CompletedDictation {
+                text: String::new(),
+                target: None,
+            });
+        }
         Ok(CompletedDictation {
             text: enhanced,
             target: self.target.map(|focus| focus.identity),
@@ -173,15 +200,15 @@ fn transcribe_with_whisper(config: &Config, samples: &[f32]) -> Result<String> {
     let runtime_dir = paths::runtime_dir()?;
     fs::create_dir_all(&runtime_dir)?;
     let stem = format!("fallback-{}", std::process::id());
-    let wav_path = runtime_dir.join(format!("{stem}.wav"));
-    write_wav(&wav_path, samples)?;
+    let wav = TemporaryAudio(runtime_dir.join(format!("{stem}.wav")));
+    write_wav(&wav.0, samples)?;
     let model = paths::fallback_model(&config.recognition.fallback_model)?;
     let output = Command::new("whisper-cli")
         .args([
             "-m",
             &model.to_string_lossy(),
             "-f",
-            &wav_path.to_string_lossy(),
+            &wav.0.to_string_lossy(),
         ])
         .args([
             "--no-timestamps",
@@ -192,13 +219,20 @@ fn transcribe_with_whisper(config: &Config, samples: &[f32]) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output();
-    let _ = fs::remove_file(&wav_path);
     let output =
         output.map_err(|error| Error::message(format!("could not run whisper-cli: {error}")))?;
     if !output.status.success() {
         return Err(Error::message("whisper-cli transcription failed"));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+struct TemporaryAudio(std::path::PathBuf);
+
+impl Drop for TemporaryAudio {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 #[allow(clippy::cast_possible_truncation)]

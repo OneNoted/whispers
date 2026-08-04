@@ -16,7 +16,8 @@ the exact installed version.
 
 ## Vocabulary
 
-Vocabulary is one shared input to recognition and deterministic correction:
+Vocabulary applies exact spoken aliases as a deterministic correction after
+recognition:
 
 ```sh
 whispers vocabulary add serde_json \

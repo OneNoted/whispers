@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString, c_char, c_float, c_int, c_void};
 use std::io::{BufReader, BufWriter};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -24,31 +24,50 @@ pub struct EngineClient {
 
 impl EngineClient {
     pub fn spawn(runtime: &str) -> Result<Self> {
-        let executable = std::env::current_exe()?;
+        let executable = std::env::var_os("WHISPERS_ENGINE_HOST")
+            .map(PathBuf::from)
+            .map_or_else(std::env::current_exe, Ok)?;
         let mut child = Command::new(executable)
             .args(["__engine-host", runtime])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()?;
-        let mut input = BufWriter::new(
-            child
-                .stdin
-                .take()
-                .ok_or_else(|| Error::message("engine host stdin is unavailable"))?,
-        );
-        let mut output = BufReader::new(
-            child
-                .stdout
-                .take()
-                .ok_or_else(|| Error::message("engine host stdout is unavailable"))?,
-        );
+        let Some(input) = child.stdin.take() else {
+            terminate_child(&mut child);
+            return Err(Error::message("engine host stdin is unavailable"));
+        };
+        let Some(output) = child.stdout.take() else {
+            terminate_child(&mut child);
+            return Err(Error::message("engine host stdout is unavailable"));
+        };
+        let input = BufWriter::new(input);
+        let mut output = BufReader::new(output);
+        let (sender, responses) = mpsc::channel();
+        thread::spawn(move || {
+            while let Ok(response) = read_json_frame::<_, EngineResponse>(&mut output) {
+                if let EngineResponse::Partial { text, .. } = &response {
+                    desktop::show_preview(text);
+                }
+                if sender.send(response).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut client = Self {
+            child,
+            input,
+            responses,
+        };
         write_json_frame(
-            &mut input,
+            &mut client.input,
             &EngineRequest::Hello {
                 protocol_version: ENGINE_PROTOCOL_VERSION,
             },
         )?;
-        let hello: EngineResponse = read_json_frame(&mut output)?;
+        let hello = client
+            .responses
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|error| Error::message(format!("engine handshake failed: {error}")))?;
         match hello {
             EngineResponse::Hello {
                 protocol_version, ..
@@ -67,30 +86,10 @@ impl EngineClient {
                 )));
             }
         }
-        let (sender, responses) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(response) = read_json_frame::<_, EngineResponse>(&mut output) {
-                if let EngineResponse::Partial { text, .. } = &response {
-                    desktop::show_preview(text);
-                }
-                if sender.send(response).is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(Self {
-            child,
-            input,
-            responses,
-        })
+        Ok(client)
     }
 
-    pub fn start(
-        &mut self,
-        session_id: u64,
-        language: &str,
-        vocabulary: Vec<String>,
-    ) -> Result<()> {
+    pub fn start(&mut self, session_id: u64, language: &str) -> Result<()> {
         while self.responses.try_recv().is_ok() {}
         write_json_frame(
             &mut self.input,
@@ -98,7 +97,6 @@ impl EngineClient {
                 session_id,
                 sample_rate: 16_000,
                 language: language.into(),
-                vocabulary,
             },
         )
     }
@@ -136,9 +134,13 @@ impl EngineClient {
 
 impl Drop for EngineClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        terminate_child(&mut self.child);
     }
+}
+
+fn terminate_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 pub fn run_host(runtime: &str) -> Result<()> {
@@ -156,7 +158,12 @@ pub fn run_host(runtime: &str) -> Result<()> {
     loop {
         let (kind, payload) = read_frame(&mut input)?;
         match kind {
-            FrameKind::Audio => recognizer.accept_audio(&payload, &mut output)?,
+            FrameKind::Audio => {
+                if payload.len() % std::mem::size_of::<f32>() != 0 {
+                    return Err(Error::message("audio frame is not aligned to f32 samples"));
+                }
+                recognizer.accept_audio(&payload, &mut output)?;
+            }
             FrameKind::Control => {
                 let request: EngineRequest = serde_json::from_slice(&payload)?;
                 match request {
@@ -180,8 +187,8 @@ pub fn run_host(runtime: &str) -> Result<()> {
                             },
                         )?;
                     }
-                    EngineRequest::Start { vocabulary, .. } => {
-                        recognizer.start(&vocabulary)?;
+                    EngineRequest::Start { language, .. } => {
+                        recognizer.start(&language)?;
                     }
                     EngineRequest::Finish => {
                         let text = recognizer.finish()?;
@@ -281,6 +288,7 @@ type CreateRecognizer = unsafe extern "C" fn(*const OnlineRecognizerConfig) -> *
 type DestroyRecognizer = unsafe extern "C" fn(*const c_void);
 type CreateStream = unsafe extern "C" fn(*const c_void) -> *const c_void;
 type DestroyStream = unsafe extern "C" fn(*const c_void);
+type SetStreamOption = unsafe extern "C" fn(*const c_void, *const c_char, *const c_char);
 type AcceptWaveform = unsafe extern "C" fn(*const c_void, c_int, *const f32, c_int);
 type IsReady = unsafe extern "C" fn(*const c_void, *const c_void) -> c_int;
 type Decode = unsafe extern "C" fn(*const c_void, *const c_void);
@@ -294,6 +302,7 @@ struct SherpaApi {
     destroy_recognizer: DestroyRecognizer,
     create_stream: CreateStream,
     destroy_stream: DestroyStream,
+    set_stream_option: SetStreamOption,
     accept_waveform: AcceptWaveform,
     is_ready: IsReady,
     decode: Decode,
@@ -323,6 +332,7 @@ impl SherpaApi {
             destroy_recognizer: symbol!("SherpaOnnxDestroyOnlineRecognizer", DestroyRecognizer),
             create_stream: symbol!("SherpaOnnxCreateOnlineStream", CreateStream),
             destroy_stream: symbol!("SherpaOnnxDestroyOnlineStream", DestroyStream),
+            set_stream_option: symbol!("SherpaOnnxOnlineStreamSetOption", SetStreamOption),
             accept_waveform: symbol!("SherpaOnnxOnlineStreamAcceptWaveform", AcceptWaveform),
             is_ready: symbol!("SherpaOnnxIsOnlineStreamReady", IsReady),
             decode: symbol!("SherpaOnnxDecodeOnlineStream", Decode),
@@ -432,13 +442,18 @@ impl SherpaRecognizer {
         })
     }
 
-    fn start(&mut self, _vocabulary: &[String]) -> Result<()> {
+    fn start(&mut self, language: &str) -> Result<()> {
         self.cancel();
         // SAFETY: Recognizer was created by this API and is alive.
         let stream = unsafe { (self.api.create_stream)(self.recognizer) };
         if stream.is_null() {
             return Err(Error::message("sherpa-onnx could not create a stream"));
         }
+        let key = CString::new("language").map_err(|_| Error::message("invalid option name"))?;
+        let language = CString::new(language.trim())
+            .map_err(|_| Error::message("language contains an invalid null byte"))?;
+        // SAFETY: The stream is alive and the runtime copies the option strings.
+        unsafe { (self.api.set_stream_option)(stream, key.as_ptr(), language.as_ptr()) };
         self.stream = Some(stream);
         self.last_partial.clear();
         self.revision = 0;
