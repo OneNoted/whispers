@@ -115,6 +115,7 @@ impl Pipeline for LocalPipeline {
 impl ActiveDictation for LocalDictation {
     fn finish(mut self: Box<Self>, cancelled: &AtomicBool) -> Result<CompletedDictation> {
         let mut osd = OsdHandoff::new();
+        desktop::show_transcribing();
         let recording = self
             .recording
             .take()
@@ -126,7 +127,6 @@ impl ActiveDictation for LocalDictation {
         if self.config.audio.feedback {
             desktop::play_cue("stop");
         }
-        desktop::show_transcribing();
         if cancelled.load(Ordering::Acquire) || !audio::has_speech(&samples) {
             osd.dismiss();
             return Ok(CompletedDictation {

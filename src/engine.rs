@@ -16,6 +16,8 @@ use crate::protocol::{
 };
 use crate::{Error, Result, paths};
 
+const FINAL_TAIL_SAMPLE_COUNT: c_int = 4_800;
+
 pub struct EngineClient {
     child: Child,
     input: BufWriter<ChildStdin>,
@@ -495,6 +497,14 @@ impl SherpaRecognizer {
             .stream
             .take()
             .ok_or_else(|| Error::message("engine stream is not active"))?;
+        // Nemotron's streaming export requires virtual trailing silence to
+        // flush its final chunk. This is decoded immediately; it is not a
+        // user-visible recording delay.
+        let tail = vec![0.0_f32; 4_800];
+        // SAFETY: Stream is alive and `tail` contains 4800 contiguous f32 samples.
+        unsafe {
+            (self.api.accept_waveform)(stream, 16_000, tail.as_ptr(), FINAL_TAIL_SAMPLE_COUNT);
+        }
         // SAFETY: Stream is alive and owned by this recognizer.
         unsafe { (self.api.input_finished)(stream) };
         self.decode_ready(stream);

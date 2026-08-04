@@ -2,7 +2,7 @@ use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
 
@@ -12,6 +12,8 @@ const SPEECH_FRAME_SAMPLES: usize = SAMPLE_RATE as usize / 50;
 const MIN_SPEECH_FRAMES: usize = 5;
 const SPEECH_RMS_THRESHOLD: f64 = 0.003;
 const DISCARD_BOUNDARY_TIMEOUT: Duration = Duration::from_secs(5);
+const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_millis(250);
+const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 pub struct PipewireRecording {
     child: Child,
@@ -139,7 +141,7 @@ impl PipewireRecording {
     }
 
     pub fn stop(mut self) -> Result<Vec<f32>> {
-        self.stop_child()?;
+        self.finish_child()?;
         if let Some(reader) = self.reader.take() {
             reader
                 .join()
@@ -152,14 +154,34 @@ impl PipewireRecording {
     }
 
     pub fn cancel(mut self) -> Result<()> {
-        self.stop_child()?;
+        self.terminate_child()?;
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
         Ok(())
     }
 
-    fn stop_child(&mut self) -> Result<()> {
+    fn finish_child(&mut self) -> Result<()> {
+        if self.child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        let pid = i32::try_from(self.child.id())
+            .map_err(|_| Error::message("PipeWire capture process ID is invalid"))?;
+        // SAFETY: `pid` names the live child process checked immediately above.
+        if unsafe { libc::kill(pid, libc::SIGINT) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let deadline = Instant::now() + GRACEFUL_STOP_TIMEOUT;
+        while Instant::now() < deadline {
+            if self.child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            thread::sleep(CHILD_POLL_INTERVAL);
+        }
+        self.terminate_child()
+    }
+
+    fn terminate_child(&mut self) -> Result<()> {
         if self.child.try_wait()?.is_some() {
             return Ok(());
         }
@@ -171,7 +193,7 @@ impl PipewireRecording {
 
 impl Drop for PipewireRecording {
     fn drop(&mut self) {
-        let _ = self.stop_child();
+        let _ = self.terminate_child();
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
