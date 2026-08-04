@@ -145,9 +145,9 @@ fn enhancement_checks(checks: &mut Vec<Check>, config: &Config) {
     if !config.enhancement.enabled {
         return;
     }
-    let runtime = if config.enhancement.command.trim().is_empty()
-        || config.enhancement.command == "managed"
-    {
+    let managed =
+        config.enhancement.command.trim().is_empty() || config.enhancement.command == "managed";
+    let runtime = if managed {
         paths::llama_server().ok()
     } else {
         find_command(&config.enhancement.command)
@@ -158,7 +158,9 @@ fn enhancement_checks(checks: &mut Vec<Check>, config: &Config) {
                 "enhancement runtime",
                 format!("{} is available", path.display()),
             ));
-            acceleration_check(checks, &path);
+            if managed {
+                acceleration_check(checks, &path);
+            }
         }
         Some(path) => checks.push(warn(
             "enhancement runtime",
