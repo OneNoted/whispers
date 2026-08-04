@@ -16,8 +16,8 @@ const MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download
 const MODEL_SHA256: &str = "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a";
 const MODEL_ROOT: &str = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11";
 const MODEL_NAME: &str = "nemotron-3.5-asr-streaming-0.6b-560ms-int8";
-const LLAMA_URL: &str = "https://github.com/ggml-org/llama.cpp/releases/download/b10258/llama-b10258-bin-ubuntu-x64.tar.gz";
-const LLAMA_SHA256: &str = "74f922e635ee9eeea32a8ec7c41d2cc4ac7b2b70af98fd3f590b0fee0672729d";
+const LLAMA_URL: &str = "https://github.com/ggml-org/llama.cpp/releases/download/b10258/llama-b10258-bin-ubuntu-vulkan-x64.tar.gz";
+const LLAMA_SHA256: &str = "21e2ca510aa05f5814adfab82e4cb2d31641596aa9a8780ae05132c731ebe75a";
 const LLAMA_ROOT: &str = "llama-b10258";
 const ENHANCEMENT_URL: &str = "https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/4168f45a16a1290d65a4ec0fa312ae917a4c15d6/Qwen_Qwen3.5-4B-Q4_K_M.gguf";
 const ENHANCEMENT_SHA256: &str = "13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983";
@@ -264,7 +264,7 @@ fn install_from_network(data_dir: &Path, install_enhancement: bool) -> Result<()
                 archive_root: LLAMA_ROOT,
             },
             &downloads,
-            &data_dir.join("runtimes/llama.cpp/current"),
+            &data_dir.join(paths::MANAGED_LLAMA_RUNTIME),
         )?;
         install_file(
             ENHANCEMENT_URL,
@@ -356,8 +356,8 @@ fn install_from_pack(pack: &Path, data_dir: &Path, install_enhancement: bool) ->
     )?;
     if install_enhancement {
         copy_install(
-            &pack.join("runtimes/llama.cpp/current"),
-            &data_dir.join("runtimes/llama.cpp/current"),
+            &pack.join(paths::MANAGED_LLAMA_RUNTIME),
+            &data_dir.join(paths::MANAGED_LLAMA_RUNTIME),
         )?;
         copy_file_install(
             &pack.join("rewrite").join(ENHANCEMENT_FILE),
@@ -459,7 +459,12 @@ pub fn validate_asr_installation(data_dir: &Path) -> Result<()> {
 
 pub fn validate_enhancement_installation(data_dir: &Path) -> Result<()> {
     for path in [
-        data_dir.join("runtimes/llama.cpp/current/llama-server"),
+        data_dir
+            .join(paths::MANAGED_LLAMA_RUNTIME)
+            .join("llama-server"),
+        data_dir
+            .join(paths::MANAGED_LLAMA_RUNTIME)
+            .join("libggml-vulkan.so"),
         data_dir.join("rewrite").join(ENHANCEMENT_FILE),
     ] {
         if !path.is_file() {

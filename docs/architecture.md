@@ -19,12 +19,15 @@ desktop delivery. It launches two independently managed inference runtimes:
 - An internal framed subprocess hosts sherpa-onnx. Control frames are JSON;
   audio frames are raw little-endian `f32` samples. The versioned protocol keeps
   native ABI details outside the service state machine.
-- A loopback-only llama.cpp server hosts enhancement. Requests have a bounded
-  timeout and output validator. Failure always returns to deterministic text.
+- A loopback-only llama.cpp server hosts enhancement. Its managed Vulkan backend
+  offloads to a compatible GPU and falls back to CPU without changing the Rust
+  build. Requests have a bounded timeout and output validator. Failure always
+  returns to deterministic text.
 
-Both runtimes remain warm in the user service. They are downloaded during
-explicit setup, verified with pinned SHA-256 digests, and loaded dynamically.
-They are not Cargo dependencies.
+Both runtimes remain warm in the user service. The enhancer also primes its
+prompt cache during service startup. Runtimes are downloaded during explicit
+setup, verified with pinned SHA-256 digests, and loaded dynamically. They are
+not Cargo dependencies.
 
 ## State and delivery
 

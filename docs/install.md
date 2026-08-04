@@ -36,8 +36,9 @@ whispers setup
 ```
 
 There are no feature combinations or CUDA-specific application builds. The
-current managed runtimes are CPU-only; a future GPU runtime can be shipped
-independently without returning ML toolchains to the Whispers compile graph.
+managed llama.cpp runtime uses Vulkan acceleration when a compatible GPU is
+available and retains its CPU backend as a fallback. GPU support remains a
+downloaded runtime, not a Rust build dependency.
 
 The binary installs a small Quickshell status OSD on first use. It remains a
 separate process, so the interface adds no GUI toolkit to the Rust dependency
@@ -66,7 +67,7 @@ pack/
 ├── models/nemotron-3.5-asr-streaming-0.6b-560ms-int8/
 ├── rewrite/Qwen_Qwen3.5-4B-Q4_K_M.gguf
 └── runtimes/
-    ├── llama.cpp/current/
+    ├── llama.cpp/b10258-vulkan/
     └── sherpa-onnx/current/
 ```
 

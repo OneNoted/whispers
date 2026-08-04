@@ -32,7 +32,9 @@ impl Enhancer {
         }
         let enhancer = Arc::clone(self);
         thread::spawn(move || {
-            let _ = enhancer.ensure_server();
+            // Load the model and prime llama.cpp's prompt cache before the first
+            // dictation reaches enhancement.
+            let _ = enhancer.enhance("Ready.");
         });
     }
 
@@ -81,15 +83,6 @@ impl Enhancer {
             .filter(|output| !output.is_empty())
             .ok_or_else(|| Error::message("enhancement returned no text"))?;
         validate_output(input, output)
-    }
-
-    fn ensure_server(&self) -> Result<()> {
-        let mut server = self.lock_server()?;
-        if server.as_mut().is_some_and(LlamaServer::is_healthy) {
-            return Ok(());
-        }
-        *server = Some(LlamaServer::start(&self.config)?);
-        Ok(())
     }
 
     fn lock_server(&self) -> Result<std::sync::MutexGuard<'_, Option<LlamaServer>>> {

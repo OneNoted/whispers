@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use crate::{Error, Result};
 
+pub const MANAGED_LLAMA_RUNTIME: &str = "runtimes/llama.cpp/b10258-vulkan";
+
 pub fn config_dir() -> Result<PathBuf> {
     xdg_path("XDG_CONFIG_HOME", ".config").map(|path| path.join("whispers"))
 }
@@ -51,7 +53,7 @@ pub fn llama_server() -> Result<PathBuf> {
     if let Some(path) = env::var_os("WHISPERS_LLAMA_SERVER") {
         return Ok(PathBuf::from(path));
     }
-    data_dir().map(|path| path.join("runtimes/llama.cpp/current/llama-server"))
+    data_dir().map(|path| path.join(MANAGED_LLAMA_RUNTIME).join("llama-server"))
 }
 
 pub fn fallback_model(model: &str) -> Result<PathBuf> {

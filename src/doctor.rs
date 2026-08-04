@@ -1,6 +1,7 @@
 use std::env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::config::Config;
 use crate::{paths, setup};
@@ -152,10 +153,13 @@ fn enhancement_checks(checks: &mut Vec<Check>, config: &Config) {
         find_command(&config.enhancement.command)
     };
     match runtime {
-        Some(path) if executable(&path) => checks.push(pass(
-            "enhancement runtime",
-            format!("{} is available", path.display()),
-        )),
+        Some(path) if executable(&path) => {
+            checks.push(pass(
+                "enhancement runtime",
+                format!("{} is available", path.display()),
+            ));
+            acceleration_check(checks, &path);
+        }
         Some(path) => checks.push(warn(
             "enhancement runtime",
             format!(
@@ -181,6 +185,44 @@ fn enhancement_checks(checks: &mut Vec<Check>, config: &Config) {
             ),
         )),
         Err(error) => checks.push(warn("enhancement model", error.to_string())),
+    }
+}
+
+fn acceleration_check(checks: &mut Vec<Check>, runtime: &Path) {
+    let Some(parent) = runtime.parent() else {
+        return;
+    };
+    if !parent.join("libggml-vulkan.so").is_file() {
+        checks.push(warn(
+            "enhancement GPU",
+            "the configured llama.cpp runtime has no Vulkan backend",
+        ));
+        return;
+    }
+    let output = Command::new(runtime)
+        .arg("--list-devices")
+        .env("LD_LIBRARY_PATH", parent)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            let devices = String::from_utf8_lossy(&output.stdout);
+            let device = devices
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with("Vulkan"));
+            if let Some(device) = device {
+                checks.push(pass("enhancement GPU", device));
+            } else {
+                checks.push(warn(
+                    "enhancement GPU",
+                    "Vulkan is installed but no accelerator was detected; CPU fallback will be used",
+                ));
+            }
+        }
+        _ => checks.push(warn(
+            "enhancement GPU",
+            "the Vulkan device probe failed; CPU fallback will be used",
+        )),
     }
 }
 
