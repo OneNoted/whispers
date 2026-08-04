@@ -29,12 +29,14 @@ They are not Cargo dependencies.
 ## State and delivery
 
 The public service states are `idle`, `listening`, `finalizing`, and
-`delivering`. Cancel is valid during listening and after recording stops.
+`delivering`. Cancel is valid while listening or finalizing. Once desktop
+delivery begins, it is reported as in progress instead of falsely promising
+that already-dispatched input was cancelled.
 
 Whispers records the focused window at start. It types with `wtype` only when
-that focus identity is still current; otherwise it copies the result and tells
-the user. Clipboard paste is a fallback, with Ctrl+Shift+V limited to terminal
-surfaces.
+that focus identity was captured and is still current; otherwise it copies the
+result and tells the user. Clipboard paste is a fallback, with Ctrl+Shift+V
+limited to terminal surfaces.
 
 ## Privacy and failure policy
 

@@ -70,11 +70,11 @@ impl Pipeline for LocalPipeline {
         let target = desktop::capture_focus();
         let vocabulary = Vocabulary::load()?;
         let (recording, receiver) = PipewireRecording::start(&self.config.audio.device)?;
-        // Capture begins before the potentially cold ASR handshake. The cue is only
-        // played after the engine is ready, so speech after the cue cannot be lost.
+        // Capture begins before the potentially cold ASR handshake. A reader-
+        // acknowledged boundary discards startup audio before the listening state
+        // is announced, so the ready signal cannot contaminate recognition.
         let streaming = self.start_engine();
-        recording.discard_buffered()?;
-        while receiver.try_recv().is_ok() {}
+        recording.discard_buffered(&receiver)?;
         let engine = Arc::clone(&self.engine);
         let feeder = thread::spawn(move || {
             while let Ok(samples) = receiver.recv() {
@@ -89,9 +89,6 @@ impl Pipeline for LocalPipeline {
                 }
             }
         });
-        if self.config.audio.feedback {
-            desktop::play_cue("start");
-        }
         desktop::show_listening();
         Ok(Box::new(LocalDictation {
             recording: Some(recording),

@@ -44,7 +44,7 @@ enum State {
     Idle,
     Listening(Box<dyn ActiveDictation>),
     Finalizing(Arc<AtomicBool>),
-    Delivering(Arc<AtomicBool>),
+    Delivering,
 }
 
 impl State {
@@ -53,7 +53,7 @@ impl State {
             Self::Idle => PublicState::Idle,
             Self::Listening(_) => PublicState::Listening,
             Self::Finalizing(_) => PublicState::Finalizing,
-            Self::Delivering(_) => PublicState::Delivering,
+            Self::Delivering => PublicState::Delivering,
         }
     }
 }
@@ -113,10 +113,11 @@ impl<P: Pipeline> Service<P> {
                 self.spawn_finalizer(active, cancelled);
                 Ok(Some("recording stopped".into()))
             }
-            State::Finalizing(cancelled) | State::Delivering(cancelled) => {
+            State::Finalizing(cancelled) => {
                 cancelled.store(true, Ordering::Release);
                 Ok(Some("pending delivery cancelled".into()))
             }
+            State::Delivering => Err(Error::message("delivery is already in progress")),
         }
     }
 
@@ -131,10 +132,11 @@ impl<P: Pipeline> Service<P> {
                 active.cancel()?;
                 Ok(Some("recording cancelled".into()))
             }
-            State::Finalizing(cancelled) | State::Delivering(cancelled) => {
+            State::Finalizing(cancelled) => {
                 cancelled.store(true, Ordering::Release);
                 Ok(Some("pending delivery cancelled".into()))
             }
+            State::Delivering => Err(Error::message("delivery is already in progress")),
         }
     }
 
@@ -159,7 +161,7 @@ impl<P: Pipeline> Service<P> {
                 }
             };
             if let Ok(mut state) = service.lock_state() {
-                *state = State::Delivering(Arc::clone(&cancelled));
+                *state = State::Delivering;
             }
             if !cancelled.load(Ordering::Acquire) {
                 if let Err(error) = service.pipeline.deliver(&dictation) {
@@ -270,5 +272,20 @@ mod tests {
         let (service, _) = service();
         service.handle(&ControlRequest::Toggle);
         assert_eq!(service.handle(&ControlRequest::Cancel).state, "idle");
+    }
+
+    #[test]
+    fn delivery_is_not_reported_as_cancellable_after_dispatch() {
+        let (service, _) = service();
+        if let Ok(mut state) = service.state.lock() {
+            *state = State::Delivering;
+        }
+        let response = service.handle(&ControlRequest::Cancel);
+        assert!(!response.ok);
+        assert_eq!(response.state, "delivering");
+        assert_eq!(
+            response.message.as_deref(),
+            Some("delivery is already in progress")
+        );
     }
 }

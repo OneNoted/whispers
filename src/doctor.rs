@@ -75,15 +75,14 @@ pub fn run() -> Report {
     }
     command_check(&mut checks, "audio capture", "pw-cat", true);
     if find_command("wtype").is_some() {
-        checks.push(pass("text delivery", "wtype is available"));
-    } else if find_command("wl-copy").is_some() {
+        checks.push(pass("direct typing", "wtype is available"));
+    } else {
         checks.push(warn(
-            "text delivery",
+            "direct typing",
             "wtype is missing; clipboard delivery will be used",
         ));
-    } else {
-        checks.push(fail("text delivery", "install wtype or wl-clipboard"));
     }
+    command_check(&mut checks, "safe clipboard", "wl-copy", true);
     command_check(&mut checks, "notifications", "notify-send", false);
     command_check(&mut checks, "audio feedback", "pw-play", false);
     command_check(&mut checks, "fallback ASR", "whisper-cli", false);

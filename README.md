@@ -72,7 +72,7 @@ Mod+Alt+D { spawn "whispers"; }
 
 ```text
 whispers                         Toggle dictation
-whispers cancel                  Cancel active or pending dictation
+whispers cancel                  Cancel recording or finalization
 whispers status                  Print the service state
 whispers setup                   Install runtimes and migrate configuration
 whispers doctor                  Diagnose the local runtime

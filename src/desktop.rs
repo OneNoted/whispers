@@ -51,9 +51,9 @@ pub fn play_cue(name: &str) {
 
 pub fn deliver(text: &str, target: Option<&str>) -> Result<()> {
     let current = capture_focus().map(|focus| focus.identity);
-    if target.is_some() && current.as_deref() != target {
+    if !focus_is_unchanged(target, current.as_deref()) {
         copy_to_clipboard(text)?;
-        show_message("Dictation copied because focus changed");
+        show_message("Dictation copied because focus could not be verified");
         return Ok(());
     }
     if type_with_wtype(text).is_ok() {
@@ -61,7 +61,10 @@ pub fn deliver(text: &str, target: Option<&str>) -> Result<()> {
     }
     copy_to_clipboard(text)?;
     let current = capture_focus();
-    if target.is_some() && current.as_ref().map(|focus| focus.identity.as_str()) != target {
+    if !focus_is_unchanged(
+        target,
+        current.as_ref().map(|focus| focus.identity.as_str()),
+    ) {
         show_message("Dictation copied because focus changed");
         return Ok(());
     }
@@ -71,6 +74,10 @@ pub fn deliver(text: &str, target: Option<&str>) -> Result<()> {
         show_message("Dictation is on the clipboard; automatic paste failed");
     }
     result
+}
+
+fn focus_is_unchanged(target: Option<&str>, current: Option<&str>) -> bool {
+    matches!((target, current), (Some(target), Some(current)) if target == current)
 }
 
 fn notify(body: &str) {
@@ -221,5 +228,14 @@ mod tests {
         assert!(is_terminal("com.mitchellh.ghostty"));
         assert!(is_terminal("foot"));
         assert!(!is_terminal("libreoffice-writer"));
+    }
+
+    #[test]
+    fn focus_must_be_known_at_both_boundaries() {
+        assert!(focus_is_unchanged(Some("window-1"), Some("window-1")));
+        assert!(!focus_is_unchanged(Some("window-1"), Some("window-2")));
+        assert!(!focus_is_unchanged(Some("window-1"), None));
+        assert!(!focus_is_unchanged(None, Some("window-1")));
+        assert!(!focus_is_unchanged(None, None));
     }
 }

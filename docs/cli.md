@@ -6,7 +6,7 @@ the exact installed version.
 | Command | Purpose |
 | --- | --- |
 | `whispers` or `whispers toggle` | Start listening, or finish the current dictation |
-| `whispers cancel` | Cancel listening, finalization, or pending delivery |
+| `whispers cancel` | Cancel listening or finalization before delivery begins |
 | `whispers status` | Print `idle`, `listening`, `finalizing`, or `delivering` |
 | `whispers setup` | Migrate config and install pinned runtimes/models |
 | `whispers doctor` | Check config, runtime files, dynamic loading, and desktop tools |

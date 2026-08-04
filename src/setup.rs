@@ -323,10 +323,10 @@ fn install_archive(asset: Asset, downloads: &Path, target: &Path) -> Result<()> 
 }
 
 fn install_file(url: &str, sha256: &str, download: &Path, target: &Path) -> Result<()> {
-    if target.is_file() {
+    if target.is_file() && verify_sha256(target, sha256).is_ok() {
         return Ok(());
     }
-    if target.exists() {
+    if target.exists() && !target.is_file() {
         return Err(Error::message(format!(
             "installation target is not a file: {}",
             target.display()
@@ -700,6 +700,34 @@ mod tests {
             systemd_escape(Path::new("/tmp/a path/whispers")),
             "\"/tmp/a path/whispers\""
         );
+    }
+
+    #[test]
+    fn replaces_an_existing_file_with_the_pinned_asset() {
+        let root =
+            std::env::temp_dir().join(format!("whispers-pinned-file-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        assert!(fs::create_dir_all(&root).is_ok());
+        let source = root.join("source.gguf");
+        let download = root.join("download.gguf");
+        let target = root.join("target.gguf");
+        assert!(fs::write(&source, b"replacement").is_ok());
+        assert!(fs::write(&target, b"truncated").is_ok());
+        let url = format!("file://{}", source.display());
+        assert!(
+            install_file(
+                &url,
+                "95713e9cbdd1dfcb2d4080c2537f418d43ca0da25f0d7d6631f4f7c97b89dc47",
+                &download,
+                &target,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            fs::read(&target).ok().as_deref(),
+            Some(b"replacement".as_slice())
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
