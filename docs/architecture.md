@@ -7,7 +7,7 @@ PipeWire capture
   → streaming sherpa-onnx / Nemotron preview
   → full-buffer sherpa-onnx / Parakeet final ASR
   → vocabulary aliases
-  → deterministic spoken symbols and line structure
+  → deterministic number, symbol, and line formatting
   → conservative local llama.cpp / Qwen enhancement
   → focus-safe Wayland delivery
 ```

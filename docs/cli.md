@@ -38,10 +38,14 @@ Common symbols are deterministic when spoken between terms:
 this slash that       → this/that
 foo underscore bar    → foo_bar
 first new line second → first\nsecond
+one, two, three       → 1, 2, 3
+one, two, three, put a hyphen between those → 1-2-3
 ```
 
 Use `literal` to force a symbol by itself (`literal slash`). Lexical uses such as
-“the word slash” are kept as words.
+“the word slash” are kept as words. Explicit number-list separators can be
+`comma`, `hyphen`, `slash`, or `space`; the formatting instruction is omitted
+from the delivered text.
 
 ## Setup
 

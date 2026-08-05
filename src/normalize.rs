@@ -6,7 +6,8 @@ enum Token {
 }
 
 pub fn normalize_spoken_text(input: &str) -> String {
-    let words: Vec<&str> = input.split_whitespace().collect();
+    let number_normalized = crate::numbers::normalize_spoken_numbers(input);
+    let words: Vec<&str> = number_normalized.split_whitespace().collect();
     let mut tokens = Vec::with_capacity(words.len());
     let mut index = 0;
     while index < words.len() {
@@ -200,6 +201,18 @@ mod tests {
         assert_eq!(
             normalize_spoken_text("first line new paragraph second line"),
             "first line\n\nsecond line"
+        );
+    }
+
+    #[test]
+    fn formats_spoken_number_sequences_before_symbols() {
+        assert_eq!(
+            normalize_spoken_text("One, two, three, put a comma between those."),
+            "1, 2, 3."
+        );
+        assert_eq!(
+            normalize_spoken_text("One, two, three. Put a hyphen between these."),
+            "1-2-3."
         );
     }
 }

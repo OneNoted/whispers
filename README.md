@@ -21,6 +21,10 @@ toolkits out of the Rust build.
 Saying “this slash that” produces `this/that`. Saying “the word slash” keeps the
 word. `literal slash` is the explicit escape hatch.
 
+Clear spoken number lists use digits. Saying “one, two, three, put a hyphen
+between those” produces `1-2-3`; `comma`, `slash`, and `space` work as explicit
+separators too.
+
 ## Why the rewrite is smaller
 
 The Rust application is a control plane with seven direct dependencies. It does
