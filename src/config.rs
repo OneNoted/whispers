@@ -29,6 +29,7 @@ pub struct AudioConfig {
 pub struct RecognitionConfig {
     pub runtime: String,
     pub model: String,
+    pub final_model: String,
     pub fallback_model: String,
 }
 
@@ -67,6 +68,7 @@ impl Default for RecognitionConfig {
         Self {
             runtime: "sherpa-onnx".into(),
             model: "nemotron-3.5-asr-streaming-0.6b-560ms-int8".into(),
+            final_model: "nemo-parakeet-unified-en-0.6b-int8".into(),
             fallback_model: "ggml-large-v3-turbo.bin".into(),
         }
     }

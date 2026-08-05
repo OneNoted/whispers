@@ -14,6 +14,7 @@ use crate::protocol::{
     ENGINE_PROTOCOL_VERSION, EngineRequest, EngineResponse, FrameKind, read_frame, read_json_frame,
     write_frame, write_json_frame,
 };
+use crate::sherpa_offline::OfflineRecognizer;
 use crate::{Error, Result, paths};
 
 const FINAL_TAIL_SAMPLE_COUNT: c_int = 4_800;
@@ -180,7 +181,8 @@ pub fn run_host(runtime: &str) -> Result<()> {
                             &mut output,
                             &EngineResponse::Hello {
                                 protocol_version: ENGINE_PROTOCOL_VERSION,
-                                engine: "sherpa-onnx/nemotron-3.5".into(),
+                                engine: "sherpa-onnx/nemotron-preview+parakeet-unified-final"
+                                    .into(),
                                 capabilities: vec![
                                     "partials".into(),
                                     "punctuation".into(),
@@ -352,13 +354,16 @@ impl SherpaApi {
 struct SherpaRecognizer {
     api: SherpaApi,
     recognizer: *const c_void,
+    final_recognizer: OfflineRecognizer,
     stream: Option<*const c_void>,
+    audio: Vec<f32>,
     last_partial: String,
     revision: u64,
 }
 
 impl SherpaRecognizer {
     fn load(config: &Config) -> Result<Self> {
+        let final_recognizer = OfflineRecognizer::load(config)?;
         let library_path = paths::sherpa_library()?;
         let model_dir = paths::recognition_model_dir(&config.recognition.model)?;
         let encoder = c_path(&model_dir.join("encoder.int8.onnx"))?;
@@ -438,7 +443,9 @@ impl SherpaRecognizer {
         Ok(Self {
             api,
             recognizer,
+            final_recognizer,
             stream: None,
+            audio: Vec::new(),
             last_partial: String::new(),
             revision: 0,
         })
@@ -457,6 +464,7 @@ impl SherpaRecognizer {
         // SAFETY: The stream is alive and the runtime copies the option strings.
         unsafe { (self.api.set_stream_option)(stream, key.as_ptr(), language.as_ptr()) };
         self.stream = Some(stream);
+        self.audio.clear();
         self.last_partial.clear();
         self.revision = 0;
         Ok(())
@@ -472,6 +480,7 @@ impl SherpaRecognizer {
             .chunks_exact(4)
             .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
             .collect::<Vec<_>>();
+        self.audio.extend_from_slice(&samples);
         let count = c_int::try_from(samples.len())
             .map_err(|_| Error::message("audio frame contains too many samples"))?;
         // SAFETY: Stream is alive and samples points to `count` contiguous f32 values.
@@ -497,6 +506,18 @@ impl SherpaRecognizer {
             .stream
             .take()
             .ok_or_else(|| Error::message("engine stream is not active"))?;
+        let final_result = self.final_recognizer.transcribe(&self.audio);
+        self.audio.clear();
+        match final_result {
+            Ok(text) => {
+                // SAFETY: Stream was created by this API and will not be used again.
+                unsafe { (self.api.destroy_stream)(stream) };
+                return Ok(text);
+            }
+            Err(error) => {
+                eprintln!("whispers: offline ASR failed, using streaming result: {error}");
+            }
+        }
         // Nemotron's streaming export requires virtual trailing silence to
         // flush its final chunk. This is decoded immediately; it is not a
         // user-visible recording delay.
@@ -515,6 +536,7 @@ impl SherpaRecognizer {
     }
 
     fn cancel(&mut self) {
+        self.audio.clear();
         if let Some(stream) = self.stream.take() {
             // SAFETY: Stream was created by this API and will not be used again.
             unsafe { (self.api.destroy_stream)(stream) };

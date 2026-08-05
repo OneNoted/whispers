@@ -13,6 +13,7 @@ pub mod pipeline;
 pub mod protocol;
 pub mod service;
 pub mod setup;
+mod sherpa_offline;
 pub mod vocabulary;
 
 pub use error::{Error, Result};

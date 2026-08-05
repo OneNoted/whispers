@@ -9,8 +9,11 @@ feedback = true
 [recognition]
 # The managed runtime and model installed by `whispers setup`.
 runtime = "sherpa-onnx"
+# Low-latency text shown in the OSD while speaking.
 model = "nemotron-3.5-asr-streaming-0.6b-560ms-int8"
-# Existing whisper.cpp model used only if streaming ASR is unavailable.
+# Accuracy-first full-recording pass used for delivered text.
+final_model = "nemo-parakeet-unified-en-0.6b-int8"
+# Existing whisper.cpp model used only if managed ASR is unavailable.
 fallback_model = "ggml-large-v3-turbo.bin"
 
 [enhancement]

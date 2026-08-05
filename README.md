@@ -9,9 +9,10 @@
 </p>
 
 Whispers is one local dictation pipeline, not a collection of modes. It records
-from PipeWire, streams speech through Nemotron, applies your vocabulary and
-spoken symbols, conservatively cleans up the intended text with a local Qwen
-model, then types it into the window where dictation began.
+from PipeWire, shows a low-latency Nemotron preview, then transcribes the full
+recording with Parakeet before applying your vocabulary, spoken symbols, and a
+conservative local Qwen cleanup. The result is typed into the window where
+dictation began.
 
 A compact bottom-center OSD shows whether Whispers is listening, transcribing,
 enhancing, or delivering. It runs out of process through Quickshell, keeping GUI
@@ -25,7 +26,8 @@ word. `literal slash` is the explicit escape hatch.
 The Rust application is a control plane with seven direct dependencies. It does
 not compile or vendor whisper.cpp, llama.cpp, CUDA, an async runtime, an audio
 stack, or a GUI toolkit. `whispers setup` downloads checksum-pinned sherpa-onnx,
-Nemotron, llama.cpp, and Qwen artifacts. Inference runtimes can therefore be
+Nemotron, Parakeet, llama.cpp, and Qwen artifacts. Inference runtimes can
+therefore be
 upgraded independently without turning every application build into an ML
 toolchain build.
 
@@ -57,7 +59,7 @@ cargo install --path . --locked
 whispers setup
 ```
 
-Setup downloads roughly 3.5 GB and preserves any version 1 configuration as a
+Setup downloads roughly 4 GB and preserves any version 1 configuration as a
 timestamped backup before importing useful settings and vocabulary.
 
 Bind `whispers` to one compositor shortcut. For Hyprland:

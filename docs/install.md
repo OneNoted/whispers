@@ -14,7 +14,7 @@ the application.
 - `notify-send` for the optional fallback when Quickshell is unavailable
 - Rust 1.85 or newer when building from source
 
-The managed assets require about 3.5 GB of download bandwidth and somewhat more
+The managed assets require about 4 GB of download bandwidth and somewhat more
 installed space. Dictation itself does not require network access.
 
 ## Arch Linux
@@ -64,7 +64,9 @@ runtime pack:
 
 ```text
 pack/
-├── models/nemotron-3.5-asr-streaming-0.6b-560ms-int8/
+├── models/
+│   ├── nemotron-3.5-asr-streaming-0.6b-560ms-int8/
+│   └── nemo-parakeet-unified-en-0.6b-int8/
 ├── rewrite/Qwen_Qwen3.5-4B-Q4_K_M.gguf
 └── runtimes/
     ├── llama.cpp/b10258-vulkan/

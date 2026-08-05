@@ -57,7 +57,7 @@ pub fn run() -> Report {
     match paths::data_dir().and_then(|path| setup::validate_asr_installation(&path)) {
         Ok(()) => checks.push(pass(
             "managed ASR",
-            "sherpa-onnx and Nemotron are installed",
+            "sherpa-onnx, Nemotron preview, and Parakeet final ASR are installed",
         )),
         Err(error) => checks.push(fail("managed ASR", error.to_string())),
     }

@@ -4,7 +4,8 @@ Whispers is one intended-text pipeline behind one toggle:
 
 ```text
 PipeWire capture
-  → streaming sherpa-onnx / Nemotron ASR
+  → streaming sherpa-onnx / Nemotron preview
+  → full-buffer sherpa-onnx / Parakeet final ASR
   → vocabulary aliases
   → deterministic spoken symbols and line structure
   → conservative local llama.cpp / Qwen enhancement
@@ -16,7 +17,9 @@ PipeWire capture
 The `whispers` process owns control, state, safety policy, normalization, and
 desktop delivery. It launches two independently managed inference runtimes:
 
-- An internal framed subprocess hosts sherpa-onnx. Control frames are JSON;
+- An internal framed subprocess hosts sherpa-onnx. Nemotron provides responsive
+  previews while recording; Parakeet reprocesses the complete in-memory audio
+  after release and is the source of delivered text. Control frames are JSON;
   audio frames are raw little-endian `f32` samples. The versioned protocol keeps
   native ABI details outside the service state machine.
 - A loopback-only llama.cpp server hosts enhancement. Its managed Vulkan backend
@@ -49,9 +52,9 @@ Transcripts are not logged. Setup downloads public artifacts; the dictation
 pipeline makes no network requests.
 
 Enhancement output is rejected if it is empty, invalid, excessively expanded,
-or removes protected symbols or numbers. ASR can fall back to an existing local
-whisper.cpp model; enhancement falls back to vocabulary plus deterministic
-normalization.
+or removes protected symbols or numbers. Final ASR falls back first to the
+streaming result, then to an existing local whisper.cpp model; enhancement falls
+back to vocabulary plus deterministic normalization.
 
 ## Build budget
 
