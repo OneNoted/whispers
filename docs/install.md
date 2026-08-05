@@ -66,7 +66,7 @@ runtime pack:
 pack/
 ├── models/
 │   ├── nemotron-3.5-asr-streaming-0.6b-560ms-int8/
-│   └── nemo-parakeet-unified-en-0.6b-int8/
+│   └── nemo-parakeet-tdt-0.6b-v3-int8/
 ├── rewrite/Qwen_Qwen3.5-4B-Q4_K_M.gguf
 └── runtimes/
     ├── llama.cpp/b10258-vulkan/

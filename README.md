@@ -10,9 +10,9 @@
 
 Whispers is one local dictation pipeline, not a collection of modes. It records
 from PipeWire, shows a low-latency Nemotron preview, then transcribes the full
-recording with Parakeet before applying your vocabulary, spoken symbols, and a
-conservative local Qwen cleanup. The result is typed into the window where
-dictation began.
+recording with multilingual Parakeet TDT v3 before applying your vocabulary,
+spoken symbols, and a conservative local Qwen cleanup. The result is typed into
+the window where dictation began.
 
 A compact bottom-center OSD shows whether Whispers is listening, transcribing,
 enhancing, or delivering. It runs out of process through Quickshell, keeping GUI

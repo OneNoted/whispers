@@ -181,8 +181,7 @@ pub fn run_host(runtime: &str) -> Result<()> {
                             &mut output,
                             &EngineResponse::Hello {
                                 protocol_version: ENGINE_PROTOCOL_VERSION,
-                                engine: "sherpa-onnx/nemotron-preview+parakeet-unified-final"
-                                    .into(),
+                                engine: "sherpa-onnx/nemotron-preview+parakeet-tdt-v3-final".into(),
                                 capabilities: vec![
                                     "partials".into(),
                                     "punctuation".into(),

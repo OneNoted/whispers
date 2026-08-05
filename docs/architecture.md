@@ -5,7 +5,7 @@ Whispers is one intended-text pipeline behind one toggle:
 ```text
 PipeWire capture
   → streaming sherpa-onnx / Nemotron preview
-  → full-buffer sherpa-onnx / Parakeet final ASR
+  → full-buffer sherpa-onnx / multilingual Parakeet TDT v3 final ASR
   → vocabulary aliases
   → deterministic number, symbol, and line formatting
   → conservative local llama.cpp / Qwen enhancement
@@ -18,10 +18,11 @@ The `whispers` process owns control, state, safety policy, normalization, and
 desktop delivery. It launches two independently managed inference runtimes:
 
 - An internal framed subprocess hosts sherpa-onnx. Nemotron provides responsive
-  previews while recording; Parakeet reprocesses the complete in-memory audio
-  after release and is the source of delivered text. Control frames are JSON;
-  audio frames are raw little-endian `f32` samples. The versioned protocol keeps
-  native ABI details outside the service state machine.
+  multilingual previews while recording; Parakeet TDT v3 reprocesses the
+  complete in-memory audio after release, automatically recognizes one of its
+  25 supported European languages, and is the source of delivered text. Control
+  frames are JSON; audio frames are raw little-endian `f32` samples. The
+  versioned protocol keeps native ABI details outside the service state machine.
 - A loopback-only llama.cpp server hosts enhancement. Its managed Vulkan backend
   offloads to a compatible GPU and falls back to CPU without changing the Rust
   build. Requests have a bounded timeout and output validator. Failure always

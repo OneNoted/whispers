@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-use crate::config::{CONFIG_VERSION, Config};
+use crate::config::{CONFIG_VERSION, Config, DEFAULT_FINAL_MODEL, LEGACY_ENGLISH_FINAL_MODEL};
 use crate::vocabulary::Vocabulary;
 use crate::{Error, Result, paths};
 
@@ -16,10 +16,9 @@ const MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download
 const MODEL_SHA256: &str = "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a";
 const MODEL_ROOT: &str = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11";
 const MODEL_NAME: &str = "nemotron-3.5-asr-streaming-0.6b-560ms-int8";
-const FINAL_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming.tar.bz2";
-const FINAL_MODEL_SHA256: &str = "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150";
-const FINAL_MODEL_ROOT: &str = "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming";
-const FINAL_MODEL_NAME: &str = "nemo-parakeet-unified-en-0.6b-int8";
+const FINAL_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2";
+const FINAL_MODEL_SHA256: &str = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf";
+const FINAL_MODEL_ROOT: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8";
 const LLAMA_URL: &str = "https://github.com/ggml-org/llama.cpp/releases/download/b10258/llama-b10258-bin-ubuntu-vulkan-x64.tar.gz";
 const LLAMA_SHA256: &str = "21e2ca510aa05f5814adfab82e4cb2d31641596aa9a8780ae05132c731ebe75a";
 const LLAMA_ROOT: &str = "llama-b10258";
@@ -103,7 +102,11 @@ fn migrate_config(path: &Path, data_dir: &Path) -> Result<ConfigMigration> {
     };
     let value: toml::Value = toml::from_str(&contents)?;
     if value.get("version").and_then(toml::Value::as_integer) == Some(i64::from(CONFIG_VERSION)) {
-        Config::load(Some(path))?.save_to(path)?;
+        let mut config = Config::load(Some(path))?;
+        if config.recognition.final_model == LEGACY_ENGLISH_FINAL_MODEL {
+            config.recognition.final_model = DEFAULT_FINAL_MODEL.into();
+        }
+        config.save_to(path)?;
         return Ok(ConfigMigration {
             migrated: false,
             legacy_vocabulary: None,
@@ -259,7 +262,7 @@ fn install_from_network(data_dir: &Path, install_enhancement: bool) -> Result<()
     )?;
     install_archive(
         Asset {
-            name: "parakeet-unified-final-model",
+            name: "parakeet-v3-final-model",
             extension: "tar.bz2",
             extract_flag: "-xjf",
             url: FINAL_MODEL_URL,
@@ -267,7 +270,7 @@ fn install_from_network(data_dir: &Path, install_enhancement: bool) -> Result<()
             archive_root: FINAL_MODEL_ROOT,
         },
         &downloads,
-        &data_dir.join("models").join(FINAL_MODEL_NAME),
+        &data_dir.join("models").join(DEFAULT_FINAL_MODEL),
     )?;
     if install_enhancement {
         install_archive(
@@ -371,8 +374,8 @@ fn install_from_pack(pack: &Path, data_dir: &Path, install_enhancement: bool) ->
         &data_dir.join("models").join(MODEL_NAME),
     )?;
     copy_install(
-        &pack.join("models").join(FINAL_MODEL_NAME),
-        &data_dir.join("models").join(FINAL_MODEL_NAME),
+        &pack.join("models").join(DEFAULT_FINAL_MODEL),
+        &data_dir.join("models").join(DEFAULT_FINAL_MODEL),
     )?;
     if install_enhancement {
         copy_install(
@@ -467,19 +470,19 @@ pub fn validate_asr_installation(data_dir: &Path) -> Result<()> {
         data_dir.join("models").join(MODEL_NAME).join("tokens.txt"),
         data_dir
             .join("models")
-            .join(FINAL_MODEL_NAME)
+            .join(DEFAULT_FINAL_MODEL)
             .join("encoder.int8.onnx"),
         data_dir
             .join("models")
-            .join(FINAL_MODEL_NAME)
+            .join(DEFAULT_FINAL_MODEL)
             .join("decoder.int8.onnx"),
         data_dir
             .join("models")
-            .join(FINAL_MODEL_NAME)
+            .join(DEFAULT_FINAL_MODEL)
             .join("joiner.int8.onnx"),
         data_dir
             .join("models")
-            .join(FINAL_MODEL_NAME)
+            .join(DEFAULT_FINAL_MODEL)
             .join("tokens.txt"),
     ];
     for path in required {
@@ -749,7 +752,27 @@ mod tests {
         let migration = migrate_config(&config, &root);
         assert!(migration.is_ok_and(|migration| !migration.migrated));
         let contents = fs::read_to_string(&config).unwrap_or_default();
-        assert!(contents.contains("final_model = \"nemo-parakeet-unified-en-0.6b-int8\""));
+        assert!(contents.contains("final_model = \"nemo-parakeet-tdt-0.6b-v3-int8\""));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upgrades_the_previous_english_only_default() {
+        let root = std::env::temp_dir().join(format!(
+            "whispers-english-default-test-{}",
+            std::process::id()
+        ));
+        let config = root.join("config.toml");
+        let _ = fs::remove_dir_all(&root);
+        assert!(fs::create_dir_all(&root).is_ok());
+        let mut previous = Config::default();
+        previous.recognition.final_model = LEGACY_ENGLISH_FINAL_MODEL.into();
+        assert!(previous.save_to(&config).is_ok());
+
+        let migration = migrate_config(&config, &root);
+        assert!(migration.is_ok_and(|migration| !migration.migrated));
+        let upgraded = Config::load(Some(&config)).unwrap_or_default();
+        assert_eq!(upgraded.recognition.final_model, DEFAULT_FINAL_MODEL);
         let _ = fs::remove_dir_all(root);
     }
 

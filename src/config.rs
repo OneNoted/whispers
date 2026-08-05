@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::{Result, paths};
 
 pub const CONFIG_VERSION: u16 = 2;
+pub const DEFAULT_FINAL_MODEL: &str = "nemo-parakeet-tdt-0.6b-v3-int8";
+pub const LEGACY_ENGLISH_FINAL_MODEL: &str = "nemo-parakeet-unified-en-0.6b-int8";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
@@ -68,7 +70,7 @@ impl Default for RecognitionConfig {
         Self {
             runtime: "sherpa-onnx".into(),
             model: "nemotron-3.5-asr-streaming-0.6b-560ms-int8".into(),
-            final_model: "nemo-parakeet-unified-en-0.6b-int8".into(),
+            final_model: DEFAULT_FINAL_MODEL.into(),
             fallback_model: "ggml-large-v3-turbo.bin".into(),
         }
     }
