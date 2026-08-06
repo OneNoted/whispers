@@ -83,9 +83,10 @@ It never deletes legacy models or configuration.
 
 ## Service and keybinding
 
-Setup installs and starts a systemd user service when available. Toggle also
-autostarts the daemon, so the systemd service is convenient rather than
-mandatory.
+Setup installs and starts a systemd user service when a Wayland session is
+available. At login, systemd skips an early start without display access; the
+first toggle then autostarts the daemon inside the compositor session. The
+systemd service is convenient rather than mandatory.
 
 Hyprland:
 

@@ -1,6 +1,7 @@
 [Unit]
 Description=Whispers local dictation service
 After=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 ExecStart=/usr/bin/whispers daemon

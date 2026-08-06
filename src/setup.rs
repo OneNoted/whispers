@@ -528,10 +528,7 @@ fn install_user_service() -> Result<bool> {
         .ok_or_else(|| Error::message("configuration directory has no parent"))?
         .join("systemd/user");
     fs::create_dir_all(&unit_dir)?;
-    let unit = format!(
-        "[Unit]\nDescription=Whispers local dictation service\nAfter=graphical-session.target\n\n[Service]\nExecStart={} daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
-        systemd_escape(&executable)
-    );
+    let unit = user_service_unit(&executable);
     fs::write(unit_dir.join("whispers.service"), unit)?;
     let reloaded = Command::new("systemctl")
         .args(["--user", "daemon-reload"])
@@ -554,6 +551,13 @@ fn install_user_service() -> Result<bool> {
             .status()
             .is_ok_and(|status| status.success());
     Ok(started)
+}
+
+fn user_service_unit(executable: &Path) -> String {
+    format!(
+        "[Unit]\nDescription=Whispers local dictation service\nAfter=graphical-session.target\nConditionEnvironment=WAYLAND_DISPLAY\n\n[Service]\nExecStart={} daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+        systemd_escape(executable)
+    )
 }
 
 fn systemd_escape(path: &Path) -> String {
@@ -782,6 +786,14 @@ mod tests {
             systemd_escape(Path::new("/tmp/a path/whispers")),
             "\"/tmp/a path/whispers\""
         );
+    }
+
+    #[test]
+    fn user_service_waits_for_wayland() {
+        let unit = user_service_unit(Path::new("/tmp/a path/whispers"));
+
+        assert!(unit.contains("ConditionEnvironment=WAYLAND_DISPLAY"));
+        assert!(unit.contains("ExecStart=\"/tmp/a path/whispers\" daemon"));
     }
 
     #[test]
