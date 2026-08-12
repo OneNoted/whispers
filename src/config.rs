@@ -15,6 +15,7 @@ pub struct Config {
     pub version: u16,
     pub language: String,
     pub audio: AudioConfig,
+    pub delivery: DeliveryConfig,
     pub recognition: RecognitionConfig,
     pub enhancement: EnhancementConfig,
 }
@@ -24,6 +25,12 @@ pub struct Config {
 pub struct AudioConfig {
     pub device: String,
     pub feedback: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DeliveryConfig {
+    pub typing_delay_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -50,6 +57,7 @@ impl Default for Config {
             version: CONFIG_VERSION,
             language: "auto".into(),
             audio: AudioConfig::default(),
+            delivery: DeliveryConfig::default(),
             recognition: RecognitionConfig::default(),
             enhancement: EnhancementConfig::default(),
         }

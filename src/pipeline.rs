@@ -104,7 +104,11 @@ impl Pipeline for LocalPipeline {
     }
 
     fn deliver(&self, dictation: &CompletedDictation) -> Result<()> {
-        desktop::deliver(&dictation.text, dictation.target.as_deref())
+        desktop::deliver(
+            &dictation.text,
+            dictation.target.as_deref(),
+            self.config.delivery.typing_delay_ms,
+        )
     }
 
     fn cancel_pending(&self) {

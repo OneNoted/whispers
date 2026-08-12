@@ -82,23 +82,29 @@ pub fn play_cue(name: &str) {
     }
 }
 
-pub fn deliver(text: &str, target: Option<&str>) -> Result<()> {
-    let result = deliver_inner(text, target);
+pub fn deliver(text: &str, target: Option<&str>, typing_delay_ms: u64) -> Result<()> {
+    let result = deliver_inner(text, target, typing_delay_ms);
     if result.is_err() {
         show_error("Delivery failed");
     }
     result
 }
 
-fn deliver_inner(text: &str, target: Option<&str>) -> Result<()> {
+fn deliver_inner(text: &str, target: Option<&str>, typing_delay_ms: u64) -> Result<()> {
     show_osd("delivering", "", false);
-    let current = capture_focus().map(|focus| focus.identity);
-    if !focus_is_unchanged(target, current.as_deref()) {
+    let current = capture_focus();
+    if !focus_is_unchanged(
+        target,
+        current.as_ref().map(|focus| focus.identity.as_str()),
+    ) {
         copy_to_clipboard(text)?;
         show_osd("copied", "Focus changed", false);
         return Ok(());
     }
-    if type_with_wtype(text).is_ok() {
+    let paste_first = current
+        .as_ref()
+        .is_some_and(|focus| prefers_clipboard_paste(&focus.app_id));
+    if !paste_first && type_with_wtype(text, typing_delay_ms).is_ok() {
         show_osd("done", "Text inserted", false);
         return Ok(());
     }
@@ -295,8 +301,9 @@ fn detail_suffix(detail: &str) -> String {
     }
 }
 
-fn type_with_wtype(text: &str) -> Result<()> {
+fn type_with_wtype(text: &str, typing_delay_ms: u64) -> Result<()> {
     let mut child = Command::new("wtype")
+        .args(["-d", &typing_delay_ms.to_string()])
         .arg("-")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -369,6 +376,13 @@ fn is_terminal(app_id: &str) -> bool {
     .any(|candidate| app_id.contains(candidate))
 }
 
+fn prefers_clipboard_paste(app_id: &str) -> bool {
+    let app_id = app_id.to_ascii_lowercase();
+    ["discord", "equibop", "vesktop", "webcord", "armcord"]
+        .iter()
+        .any(|candidate| app_id.contains(candidate))
+}
+
 fn capture_niri() -> Option<Focus> {
     let output = Command::new("niri")
         .args(["msg", "--json", "focused-window"])
@@ -419,6 +433,14 @@ mod tests {
         assert!(is_terminal("com.mitchellh.ghostty"));
         assert!(is_terminal("foot"));
         assert!(!is_terminal("libreoffice-writer"));
+    }
+
+    #[test]
+    fn recognizes_discord_clients_that_need_clipboard_paste() {
+        assert!(prefers_clipboard_paste("equibop"));
+        assert!(prefers_clipboard_paste("com.discordapp.Discord"));
+        assert!(prefers_clipboard_paste("vesktop"));
+        assert!(!prefers_clipboard_paste("firefox"));
     }
 
     #[test]

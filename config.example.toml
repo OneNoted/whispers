@@ -6,6 +6,11 @@ language = "auto"
 device = ""
 feedback = true
 
+[delivery]
+# Direct typing remains unpaced by default. Increase this only for applications
+# that cannot keep up with virtual keyboard events.
+typing_delay_ms = 0
+
 [recognition]
 # The managed runtime and model installed by `whispers setup`.
 runtime = "sherpa-onnx"

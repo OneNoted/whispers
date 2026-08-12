@@ -32,8 +32,17 @@ Whispers refuses to type into a different window than the one where dictation
 began. When focus changes, the result is placed on the clipboard and a
 notification explains why. Return to the intended window and paste manually.
 
-If focus did not change, verify `wtype` and `wl-copy` are installed. Terminal
-fallback uses Ctrl+Shift+V; other applications use Ctrl+V.
+If focus did not change, verify `wtype` and `wl-copy` are installed. Discord
+clients use clipboard paste because their editors can drop rapid virtual-keyboard
+input. Terminal fallback uses Ctrl+Shift+V; other applications use Ctrl+V.
+
+For another application that drops characters during direct typing, set a small
+delay without changing Discord's clipboard-first behavior:
+
+```toml
+[delivery]
+typing_delay_ms = 5
+```
 
 ## Enhancement falls back
 
