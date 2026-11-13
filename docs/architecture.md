@@ -8,7 +8,7 @@ PipeWire capture
   → full-buffer sherpa-onnx / multilingual Parakeet TDT v3 final ASR
   → vocabulary aliases
   → deterministic number, symbol, and line formatting
-  → conservative local llama.cpp / Qwen enhancement
+  → local llama.cpp / Qwen correction and disfluency cleanup
   → focus-safe Wayland delivery
 ```
 
@@ -23,10 +23,11 @@ desktop delivery. It launches two independently managed inference runtimes:
   25 supported European languages, and is the source of delivered text. Control
   frames are JSON; audio frames are raw little-endian `f32` samples. The
   versioned protocol keeps native ABI details outside the service state machine.
-- A loopback-only llama.cpp server hosts enhancement. Its managed Vulkan backend
-  offloads to a compatible GPU and falls back to CPU without changing the Rust
-  build. Requests have a bounded timeout and output validator. Failure always
-  returns to deterministic text.
+- A loopback-only llama.cpp server corrects obvious recognition errors and
+  removes clear fillers, repetitions, and false starts. Its managed Vulkan
+  backend offloads to a compatible GPU and falls back to CPU without changing
+  the Rust build. Requests have a bounded timeout and output validator. Failure
+  always returns to deterministic text.
 
 Both runtimes remain warm in the user service. The enhancer also primes its
 prompt cache during service startup. Runtimes are downloaded during explicit

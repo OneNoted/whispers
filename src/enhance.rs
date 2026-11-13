@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::EnhancementConfig;
 use crate::{Error, Result, paths};
 
-const SYSTEM_PROMPT: &str = "Convert this speech transcript into the text the speaker intended to type. Correct only obvious recognition mistakes, punctuation, and light grammar. Do not paraphrase or replace valid word choices for style. Preserve meaning, names, numbers, code identifiers, symbols, URLs, line breaks, and deliberate informality. If a correction is uncertain, keep the original wording. Return only the corrected text without quotes, commentary, or markdown.";
+const SYSTEM_PROMPT: &str = "Convert this speech transcript into the text the speaker intended to type. Correct obvious recognition mistakes, punctuation, and light grammar. Remove obvious verbal fillers such as um and uh, accidental repetitions, and abandoned false starts. Remove phrases such as like and you know only when they are clearly fillers. Do not paraphrase, replace valid word choices for style, or flatten deliberate informality. Preserve meaning, names, numbers, code identifiers, symbols, URLs, and line breaks. If a correction is uncertain, keep the original wording. Return only the corrected text without quotes, commentary, or markdown.";
 
 pub struct Enhancer {
     config: EnhancementConfig,
@@ -313,10 +313,10 @@ fn validate_output(input: &str, output: &str) -> Result<String> {
         ));
     }
     let (changes, input_words) = lexical_edit_distance(input, output);
-    let change_budget = if input_words <= 2 {
+    let change_budget = if input_words <= 1 {
         0
     } else {
-        1_usize.saturating_add(input_words / 12)
+        input_words.div_ceil(4)
     };
     if changes > change_budget {
         return Err(Error::message(format!(
@@ -405,6 +405,19 @@ mod tests {
         assert!(validate_output("x+y", "x plus y").is_err());
         assert!(validate_output("first\nsecond", "first second").is_err());
         assert!(validate_output("accurate", "Accura").is_err());
+        assert_eq!(
+            validate_output("I agre", "I agree").ok().as_deref(),
+            Some("I agree")
+        );
+        assert_eq!(
+            validate_output(
+                "Okay uh I think we should like probably ship this now",
+                "Okay, I think we should probably ship this now."
+            )
+            .ok()
+            .as_deref(),
+            Some("Okay, I think we should probably ship this now.")
+        );
         assert_eq!(
             validate_output("that result is accurate", "That result is accurate.")
                 .ok()

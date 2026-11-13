@@ -6,7 +6,7 @@ use whispers::paths;
 
 #[test]
 #[ignore = "requires a managed llama.cpp runtime and local GGUF model"]
-fn local_enhancement_preserves_protected_text() {
+fn local_enhancement_cleans_transcript_safely() {
     let model = std::env::var("WHISPERS_TEST_ENHANCE_MODEL").unwrap_or_default();
     assert!(!model.is_empty(), "WHISPERS_TEST_ENHANCE_MODEL is required");
     let enhancer = Enhancer::new(EnhancementConfig {
@@ -21,6 +21,14 @@ fn local_enhancement_preserves_protected_text() {
     assert!(output.contains("this/that"), "{output}");
     assert!(output.contains("serde_json"), "{output}");
     assert!(output.contains("3.2"), "{output}");
+
+    let output = enhancer
+        .enhance("Okay uh I think we should like probably ship this now")
+        .unwrap_or_default();
+    let output = output.to_ascii_lowercase();
+    assert!(!output.contains(" uh "), "{output}");
+    assert!(!output.contains(" like "), "{output}");
+    assert!(output.contains("ship this now"), "{output}");
 }
 
 #[test]
