@@ -116,7 +116,13 @@ fn main() {
         });
     }
 
-    if env::var("WHISPER_FORCE_GENERATE_BINDINGS").is_ok() || cfg!(feature = "vulkan") {
+    // Always use the bundled bindings, which include the ggml-vulkan symbols.
+    // bindgen on libclang >= 22 emits an opaque stub for whisper_full_params,
+    // corrupting the ABI passed to whisper_full. To regenerate, use libclang 18:
+    //   LIBCLANG_PATH=<clang18> WHISPER_FORCE_GENERATE_BINDINGS=1 \
+    //     cargo check --no-default-features --features vulkan
+    // then copy OUT_DIR/bindings.rs over src/bindings.rs.
+    if env::var("WHISPER_FORCE_GENERATE_BINDINGS").is_ok() {
         let bindings = bindgen::Builder::default().header("wrapper.h");
 
         #[cfg(feature = "metal")]

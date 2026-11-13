@@ -156,7 +156,7 @@ pub const __USE_ISOC99: u32 = 1;
 pub const __USE_ISOC95: u32 = 1;
 pub const __USE_POSIX_IMPLICITLY: u32 = 1;
 pub const _POSIX_SOURCE: u32 = 1;
-pub const _POSIX_C_SOURCE: u32 = 200809;
+pub const _POSIX_C_SOURCE: u32 = 202405;
 pub const __USE_POSIX: u32 = 1;
 pub const __USE_POSIX2: u32 = 1;
 pub const __USE_POSIX199309: u32 = 1;
@@ -164,6 +164,7 @@ pub const __USE_POSIX199506: u32 = 1;
 pub const __USE_XOPEN2K: u32 = 1;
 pub const __USE_XOPEN2K8: u32 = 1;
 pub const _ATFILE_SOURCE: u32 = 1;
+pub const __USE_XOPEN2K24: u32 = 1;
 pub const __WORDSIZE: u32 = 64;
 pub const __WORDSIZE_TIME64_COMPAT32: u32 = 1;
 pub const __SYSCALL_WORDSIZE: u32 = 64;
@@ -183,7 +184,7 @@ pub const __STDC_IEC_60559_COMPLEX__: u32 = 201404;
 pub const __STDC_ISO_10646__: u32 = 201706;
 pub const __GNU_LIBRARY__: u32 = 6;
 pub const __GLIBC__: u32 = 2;
-pub const __GLIBC_MINOR__: u32 = 41;
+pub const __GLIBC_MINOR__: u32 = 44;
 pub const _SYS_CDEFS_H: u32 = 1;
 pub const __glibc_c99_flexarr_available: u32 = 1;
 pub const __LDOUBLE_REDIRECTS_TO_FLOAT128_ABI: u32 = 0;
@@ -312,6 +313,8 @@ pub const WHISPER_SAMPLE_RATE: u32 = 16000;
 pub const WHISPER_N_FFT: u32 = 400;
 pub const WHISPER_HOP_LENGTH: u32 = 160;
 pub const WHISPER_CHUNK_SIZE: u32 = 30;
+pub const GGML_VK_NAME: &[u8; 7] = b"Vulkan\0";
+pub const GGML_VK_MAX_DEVICES: u32 = 16;
 pub type wchar_t = ::std::os::raw::c_int;
 #[repr(C)]
 #[repr(align(16))]
@@ -534,7 +537,9 @@ pub struct _IO_FILE {
     pub _freeres_buf: *mut ::std::os::raw::c_void,
     pub _prevchain: *mut *mut _IO_FILE,
     pub _mode: ::std::os::raw::c_int,
-    pub _unused2: [::std::os::raw::c_char; 20usize],
+    pub _unused3: ::std::os::raw::c_int,
+    pub _total_written: __uint64_t,
+    pub _unused2: [::std::os::raw::c_char; 8usize],
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -588,7 +593,10 @@ const _: () = {
     ["Offset of field: _IO_FILE::_prevchain"]
         [::std::mem::offset_of!(_IO_FILE, _prevchain) - 184usize];
     ["Offset of field: _IO_FILE::_mode"][::std::mem::offset_of!(_IO_FILE, _mode) - 192usize];
-    ["Offset of field: _IO_FILE::_unused2"][::std::mem::offset_of!(_IO_FILE, _unused2) - 196usize];
+    ["Offset of field: _IO_FILE::_unused3"][::std::mem::offset_of!(_IO_FILE, _unused3) - 196usize];
+    ["Offset of field: _IO_FILE::_total_written"]
+        [::std::mem::offset_of!(_IO_FILE, _total_written) - 200usize];
+    ["Offset of field: _IO_FILE::_unused2"][::std::mem::offset_of!(_IO_FILE, _unused2) - 208usize];
 };
 impl _IO_FILE {
     #[inline]
@@ -5668,6 +5676,38 @@ unsafe extern "C" {
         state: *mut whisper_state,
         i_segment: ::std::os::raw::c_int,
     ) -> f32;
+}
+unsafe extern "C" {
+    pub fn ggml_backend_vk_init(dev_num: usize) -> ggml_backend_t;
+}
+unsafe extern "C" {
+    pub fn ggml_backend_is_vk(backend: ggml_backend_t) -> bool;
+}
+unsafe extern "C" {
+    pub fn ggml_backend_vk_get_device_count() -> ::std::os::raw::c_int;
+}
+unsafe extern "C" {
+    pub fn ggml_backend_vk_get_device_description(
+        device: ::std::os::raw::c_int,
+        description: *mut ::std::os::raw::c_char,
+        description_size: usize,
+    );
+}
+unsafe extern "C" {
+    pub fn ggml_backend_vk_get_device_memory(
+        device: ::std::os::raw::c_int,
+        free: *mut usize,
+        total: *mut usize,
+    );
+}
+unsafe extern "C" {
+    pub fn ggml_backend_vk_buffer_type(dev_num: usize) -> ggml_backend_buffer_type_t;
+}
+unsafe extern "C" {
+    pub fn ggml_backend_vk_host_buffer_type() -> ggml_backend_buffer_type_t;
+}
+unsafe extern "C" {
+    pub fn ggml_backend_vk_reg() -> ggml_backend_reg_t;
 }
 pub type __builtin_va_list = [__va_list_tag; 1usize];
 #[repr(C)]
