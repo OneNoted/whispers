@@ -45,6 +45,9 @@ flash_attn = true
 threads = 0
 # How long the hidden ASR worker stays warm without requests (0 = never expire)
 idle_timeout_ms = 120000
+# Custom vocabulary injected as the whisper initial_prompt to bias decoding
+# (whisper_cpp backend only).
+vocabulary = []
 
 [postprocess]
 # "raw" (default), "rewrite", or "legacy_basic" for deprecated cleanup configs

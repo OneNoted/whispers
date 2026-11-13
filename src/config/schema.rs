@@ -60,6 +60,8 @@ pub struct TranscriptionConfig {
     pub flash_attn: bool,
     pub threads: u16,
     pub idle_timeout_ms: u64,
+    /// Custom vocabulary injected as the whisper initial_prompt to bias decoding.
+    pub vocabulary: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -261,6 +263,7 @@ impl Default for TranscriptionConfig {
             flash_attn: true,
             threads: 0,
             idle_timeout_ms: 120000,
+            vocabulary: Vec::new(),
         }
     }
 }

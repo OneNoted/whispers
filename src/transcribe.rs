@@ -64,6 +64,7 @@ pub struct WhisperLocal {
     ctx: WhisperContext,
     language: String,
     threads: i32,
+    initial_prompt: String,
 }
 
 impl WhisperLocal {
@@ -77,14 +78,29 @@ impl WhisperLocal {
 
         tracing::info!("loading whisper model from {}", model_path.display());
 
+        let terms = config
+            .vocabulary
+            .iter()
+            .map(|word| word.trim())
+            .filter(|word| !word.is_empty())
+            .collect::<Vec<_>>();
+        let initial_prompt = terms.join(", ");
+
+        // whisper.cpp's Vulkan flash attention returns empty output when an
+        // initial prompt is prefilled, so skip it while vocabulary is active.
+        let flash_attn = config.use_gpu && config.flash_attn && terms.is_empty();
+
         let mut ctx_params = WhisperContextParameters::default();
         ctx_params.use_gpu(config.use_gpu);
-        ctx_params.flash_attn(config.use_gpu && config.flash_attn);
+        ctx_params.flash_attn(flash_attn);
         tracing::info!(
             "whisper acceleration: use_gpu={}, flash_attn={}",
             config.use_gpu,
-            config.use_gpu && config.flash_attn
+            flash_attn
         );
+        if !terms.is_empty() {
+            tracing::info!("whisper vocabulary prompt: {} terms", terms.len());
+        }
 
         let model_path_str = model_path.to_str().ok_or_else(|| {
             WhsprError::Transcription(format!(
@@ -117,6 +133,7 @@ impl WhisperLocal {
             ctx,
             language: config.language.clone(),
             threads,
+            initial_prompt,
         })
     }
 }
@@ -220,6 +237,9 @@ impl WhisperLocal {
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);
         params.set_n_threads(self.threads);
+        if !self.initial_prompt.is_empty() {
+            params.set_initial_prompt(&self.initial_prompt);
+        }
 
         let mut state = self.ctx.create_state().map_err(|e| {
             WhsprError::Transcription(format!("failed to create whisper state: {e}"))
