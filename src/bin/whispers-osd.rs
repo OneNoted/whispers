@@ -126,7 +126,7 @@ impl BarState {
         let rms_target = (rms * 4.0).min(1.0);
         self.smooth_rms = self.smooth_rms * 0.85 + rms_target * 0.15;
 
-        for i in 0..NUM_BARS {
+        for (i, height) in self.heights.iter_mut().enumerate() {
             let t = i as f32 / NUM_BARS as f32;
             let wave1 = (t * std::f32::consts::PI * 2.0 + time * 2.0).sin() * 0.5 + 0.5;
             let wave2 = (t * std::f32::consts::PI * 1.5 - time * 1.2).sin() * 0.3 + 0.5;
@@ -135,12 +135,12 @@ impl BarState {
             let combined = (wave1 * 0.55 + wave2 * 0.30 + wave3 * 0.15) * level;
             let target = BAR_MIN_HEIGHT + combined * (BAR_MAX_HEIGHT - BAR_MIN_HEIGHT);
 
-            if target > self.heights[i] {
-                self.heights[i] += (target - self.heights[i]) * RISE_RATE;
+            if target > *height {
+                *height += (target - *height) * RISE_RATE;
             } else {
-                self.heights[i] = self.heights[i] * DECAY_RATE + target * (1.0 - DECAY_RATE);
+                *height = *height * DECAY_RATE + target * (1.0 - DECAY_RATE);
             }
-            self.heights[i] = self.heights[i].clamp(BAR_MIN_HEIGHT, BAR_MAX_HEIGHT);
+            *height = height.clamp(BAR_MIN_HEIGHT, BAR_MAX_HEIGHT);
         }
     }
 }
@@ -768,9 +768,9 @@ fn render_meter_bars(
     let glow_expand = 1 + (color_t * 2.0) as u32;
     let glow_alpha = (15.0 + color_t * 25.0) as u8;
 
-    for i in 0..NUM_BARS {
+    for (i, &height) in bars.heights.iter().enumerate() {
         let bx = start_x + i as u32 * (BAR_WIDTH + BAR_GAP);
-        let bar_h = bars.heights[i] as u32;
+        let bar_h = height as u32;
         let half_h = bar_h / 2;
         let top_y = center_y.saturating_sub(half_h);
 
@@ -803,9 +803,9 @@ fn render_voice_bars(
     center_y: u32,
     start_x: u32,
 ) {
-    for i in 0..NUM_BARS {
+    for (i, &height) in bars.heights.iter().enumerate() {
         let bx = start_x + i as u32 * (BAR_WIDTH + BAR_GAP);
-        let bar_h = bars.heights[i] as u32;
+        let bar_h = height as u32;
         let half_h = bar_h / 2;
         let top_y = center_y.saturating_sub(half_h);
 

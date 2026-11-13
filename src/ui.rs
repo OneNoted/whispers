@@ -200,7 +200,7 @@ impl Theme for ConfirmTheme {
             write!(
                 f,
                 "{} {} ",
-                &self.base.prompt_prefix,
+                self.base.prompt_prefix,
                 self.base.prompt_style.apply_to(prompt)
             )?;
         }
@@ -220,7 +220,7 @@ impl Theme for ConfirmTheme {
                 brackets.apply_to("/"),
                 no,
                 brackets.apply_to("]"),
-                &self.base.prompt_suffix
+                self.base.prompt_suffix
             ),
             Some(true) => write!(
                 f,
@@ -230,7 +230,7 @@ impl Theme for ConfirmTheme {
                 brackets.apply_to("/"),
                 no,
                 brackets.apply_to("]"),
-                &self.base.prompt_suffix,
+                self.base.prompt_suffix,
                 self.base.defaults_style.apply_to("yes")
             ),
             Some(false) => write!(
@@ -241,7 +241,7 @@ impl Theme for ConfirmTheme {
                 brackets.apply_to("/"),
                 no_default,
                 brackets.apply_to("]"),
-                &self.base.prompt_suffix,
+                self.base.prompt_suffix,
                 self.base.defaults_style.apply_to("no")
             ),
         }
