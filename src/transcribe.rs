@@ -78,33 +78,28 @@ impl WhisperLocal {
 
         tracing::info!("loading whisper model from {}", model_path.display());
 
-        let initial_prompt = config
+        let terms = config
             .vocabulary
             .iter()
             .map(|word| word.trim())
             .filter(|word| !word.is_empty())
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect::<Vec<_>>();
+        let initial_prompt = terms.join(", ");
 
-        // whisper.cpp Vulkan flash-attention mis-decodes (immediate EOT, empty
-        // output) whenever a KV prefill from initial_prompt is present; repro'd
-        // on RADV RDNA4 with vendored whisper.cpp. Skip FA when biasing is active.
-        let flash_attn = config.flash_attn && initial_prompt.is_empty();
+        // whisper.cpp's Vulkan flash attention returns empty output when an
+        // initial prompt is prefilled, so skip it while vocabulary is active.
+        let flash_attn = config.use_gpu && config.flash_attn && terms.is_empty();
 
         let mut ctx_params = WhisperContextParameters::default();
         ctx_params.use_gpu(config.use_gpu);
-        ctx_params.flash_attn(config.use_gpu && flash_attn);
+        ctx_params.flash_attn(flash_attn);
         tracing::info!(
             "whisper acceleration: use_gpu={}, flash_attn={}",
             config.use_gpu,
-            config.use_gpu && flash_attn
+            flash_attn
         );
-        if !initial_prompt.is_empty() {
-            tracing::info!(
-                "whisper vocabulary prompt: {} terms (flash_attn forced off: {})",
-                config.vocabulary.len(),
-                config.flash_attn
-            );
+        if !terms.is_empty() {
+            tracing::info!("whisper vocabulary prompt: {} terms", terms.len());
         }
 
         let model_path_str = model_path.to_str().ok_or_else(|| {
