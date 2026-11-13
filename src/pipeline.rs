@@ -156,10 +156,10 @@ impl ActiveDictation for LocalDictation {
             };
             streaming_result.or_else(|error| {
                 eprintln!("whispers: streaming ASR failed, trying whisper-cli: {error}");
-                transcribe_with_whisper(&self.config, &samples)
+                transcribe_with_whisper(&self.config, &self.vocabulary, &samples)
             })?
         } else {
-            transcribe_with_whisper(&self.config, &samples)?
+            transcribe_with_whisper(&self.config, &self.vocabulary, &samples)?
         };
         if cancelled.load(Ordering::Acquire) {
             osd.dismiss();
@@ -241,14 +241,19 @@ impl Drop for OsdHandoff {
     }
 }
 
-fn transcribe_with_whisper(config: &Config, samples: &[f32]) -> Result<String> {
+fn transcribe_with_whisper(
+    config: &Config,
+    vocabulary: &Vocabulary,
+    samples: &[f32],
+) -> Result<String> {
     let runtime_dir = paths::runtime_dir()?;
     fs::create_dir_all(&runtime_dir)?;
     let stem = format!("fallback-{}", std::process::id());
     let wav = TemporaryAudio(runtime_dir.join(format!("{stem}.wav")));
     write_wav(&wav.0, samples)?;
     let model = paths::fallback_model(&config.recognition.fallback_model)?;
-    let output = Command::new("whisper-cli")
+    let mut command = Command::new("whisper-cli");
+    command
         .args([
             "-m",
             &model.to_string_lossy(),
@@ -260,7 +265,13 @@ fn transcribe_with_whisper(config: &Config, samples: &[f32]) -> Result<String> {
             "--no-prints",
             "--language",
             &config.language,
-        ])
+        ]);
+    // Bias the fallback decoder toward vocabulary terms it would otherwise mishear.
+    let prompt = vocabulary.initial_prompt();
+    if !prompt.is_empty() {
+        command.args(["--prompt", &prompt]);
+    }
+    let output = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output();

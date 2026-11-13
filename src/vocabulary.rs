@@ -125,6 +125,18 @@ impl Vocabulary {
         replacements.sort_by_key(|(alias, _)| std::cmp::Reverse(alias.len()));
         replace_phrases(input, &replacements)
     }
+
+    /// Joins the canonical terms into a whisper initial prompt that biases
+    /// decoding toward them. whisper.cpp keeps at most `n_text_ctx / 2` prompt
+    /// tokens, so very large vocabularies are truncated by the decoder.
+    pub fn initial_prompt(&self) -> String {
+        self.entries
+            .iter()
+            .map(|entry| entry.term.trim())
+            .filter(|term| !term.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 fn replace_phrases(input: &str, replacements: &[(&str, &str)]) -> String {
@@ -196,6 +208,20 @@ mod tests {
             vocabulary.apply("Use Surdy JSON, not serde jsonish."),
             "Use serde_json, not serde jsonish."
         );
+    }
+
+    #[test]
+    fn initial_prompt_joins_nonempty_terms() {
+        let entry = |term: &str| VocabularyEntry {
+            term: term.into(),
+            aliases: vec!["alias".into()],
+        };
+        let vocabulary = Vocabulary {
+            version: VOCABULARY_VERSION,
+            entries: vec![entry(" Vulkan "), entry(""), entry("RenderDoc")],
+        };
+        assert_eq!(vocabulary.initial_prompt(), "Vulkan, RenderDoc");
+        assert_eq!(Vocabulary::default().initial_prompt(), "");
     }
 
     #[test]
