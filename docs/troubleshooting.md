@@ -1,82 +1,65 @@
 # Troubleshooting
 
-## Start with setup
-
-If local dictation is not behaving correctly, rerun the guided setup first:
+Start with the built-in report:
 
 ```sh
-whispers setup
+whispers doctor
 ```
 
-That flow validates the current config, offers model downloads, and can fix `/dev/uinput` access for paste injection.
+`FAIL` means core dictation cannot work; `WARN` describes an optional fallback
+or desktop integration.
 
-## `wl-copy` is missing
+## Setup was interrupted
 
-`whispers` uses `wl-copy` for clipboard injection. Install `wl-clipboard` (or otherwise make `wl-copy` available on `PATH`) and try again.
+Rerun the same command. Downloads resume into the data directory, checksums are
+verified before install, and completed targets are skipped.
 
-## `/dev/uinput` is missing or not writable
+## Audio does not start
 
-Paste injection depends on `/dev/uinput`.
-
-Recommended path:
+Confirm PipeWire sees a default source and that raw capture works:
 
 ```sh
-whispers setup
+wpctl status
+pw-cat --record --raw --format f32 --rate 16000 --channels 1 >/dev/null
 ```
 
-If you handle it manually instead, the fallback guidance is:
+Set `[audio].device` only when the default PipeWire source is not the microphone
+you want.
 
-- Load the kernel module: `sudo modprobe uinput`
-- Persist it across reboots if needed: create `/etc/modules-load.d/whispers-uinput.conf` with `uinput`
-- Create a dedicated `uinput` group and a `udev` rule for `/dev/uinput`
-- Log out and back in after group membership changes
+## Text was copied instead of typed
 
-## Cloud checks
+Whispers refuses to type into a different window than the one where dictation
+began. When focus changes, the result is placed on the clipboard and a
+notification explains why. Return to the intended window and paste manually.
 
-If cloud ASR or rewrite is configured but not working, validate the current provider, credentials, and reachability:
+If focus did not change, verify `wtype` and `wl-copy` are installed. Discord
+clients use clipboard paste because their editors can drop rapid virtual-keyboard
+input. Terminal fallback uses Ctrl+Shift+V; other applications use Ctrl+V.
 
-```sh
-whispers cloud check
-```
-
-## Local acceleration is not active
-
-`[transcription].use_gpu = true` requests GPU acceleration from the local `whisper_cpp` backend, but the binary also has to be built with a GPU backend such as `vulkan` or `cuda`.
-
-For Vulkan builds, make sure the Vulkan loader and a GPU driver are installed. On Arch with AMD graphics, that usually means `vulkan-icd-loader` plus `vulkan-radeon`. `vulkaninfo` from `vulkan-tools` is a quick way to confirm the driver is visible.
-
-If a source build fails with a missing `glslc`, install the shader compiler package (`shaderc` on Arch, `glslc` on Ubuntu).
-
-If transcription keeps saturating too many CPU cores, tune:
+For another application that drops characters during direct typing, set a small
+delay without changing Discord's clipboard-first behavior:
 
 ```toml
-[transcription]
-threads = 0
+[delivery]
+typing_delay_ms = 5
 ```
 
-`threads = 0` is auto and caps local `whisper_cpp` at 8 logical CPUs. Set a positive value to force a specific worker count.
+## Enhancement falls back
 
-## Inspect rewrite resource paths
-
-These helpers are useful when you want to confirm which runtime files the current config points at:
+Deterministic symbol handling and vocabulary still run if local enhancement is
+unavailable. Check:
 
 ```sh
-whispers app-rule path
-whispers glossary path
-whispers rewrite-instructions-path
+whispers doctor
+systemctl --user status whispers.service
 ```
 
-## Local `whisper_cpp` hang diagnostics
+The enhancer rejects output that drops protected symbols or numbers, expands the
+transcript excessively, or returns invalid text. That fallback is intentional.
 
-If the main `whispers` process ever gets stuck after playback when using local `whisper_cpp`, enable the built-in hang diagnostics for the next repro:
+## Existing version 1 configuration
 
-```sh
-WHISPERS_HANG_DEBUG=1 whispers
-```
-
-When that mode is enabled, `whispers` writes runtime status and hang bundles under `${XDG_RUNTIME_DIR:-/tmp}/whispers/`:
-
-- `main-status.json` shows the current dictation stage and recent stage metadata.
-- `hang-<pid>-<stage>-<timestamp>.log` is emitted if `whisper_cpp` spends too long in model load or transcription.
-
-Those bundles include the current status snapshot plus best-effort stack and open-file diagnostics. If the hang reproduces, capture the newest `hang-*.log` file along with `main-status.json`.
+Run `whispers setup`. Version 1 is not interpreted as version 2. Setup backs up
+the original, imports compatible audio/language/model choices and vocabulary,
+then writes the smaller schema. Legacy files and models are left in place for
+manual cleanup after you are satisfied with the rewrite.

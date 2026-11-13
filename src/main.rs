@@ -1,248 +1,123 @@
-use std::path::Path;
+use std::process::ExitCode;
 
-use clap::Parser;
-use whispers::cli::{
-    AppRuleAction, AsrModelAction, Cli, CloudAction, Command, DictionaryAction, GlossaryAction,
-    ModelAction, RewriteModelAction, SnippetAction,
-};
-use whispers::config::Config;
-use whispers::error::Result;
-use whispers::rewrite_protocol::RewriteSurfaceKind;
-use whispers::{
-    agentic_rewrite, app, asr, asr_model, audio, cloud, completions, file_audio, inject, model,
-    personalization, postprocess, rewrite_model, runtime_support, setup,
-};
+use whispers::protocol::ControlRequest;
+use whispers::{cli, daemon, doctor, engine, setup};
 
-fn build_context_matcher(
-    surface_kind: Option<RewriteSurfaceKind>,
-    app_id: Option<&String>,
-    window_title_contains: Option<&String>,
-    browser_domain_contains: Option<&String>,
-) -> agentic_rewrite::ContextMatcher {
-    agentic_rewrite::ContextMatcher {
-        surface_kind,
-        app_id: app_id.cloned(),
-        window_title_contains: window_title_contains.cloned(),
-        browser_domain_contains: browser_domain_contains.cloned(),
+fn main() -> ExitCode {
+    match cli::parse(std::env::args_os().skip(1)) {
+        Ok(cli::Command::Help) => {
+            print!("{}", cli::HELP);
+            ExitCode::SUCCESS
+        }
+        Ok(cli::Command::Version) => {
+            println!("whispers {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Ok(cli::Command::Toggle) => control(&ControlRequest::Toggle, true),
+        Ok(cli::Command::Cancel) => control(&ControlRequest::Cancel, false),
+        Ok(cli::Command::Status) => control(&ControlRequest::Status, false),
+        Ok(cli::Command::Setup {
+            offline_pack,
+            no_service,
+        }) => {
+            result(setup::run(offline_pack.as_deref(), !no_service).map(|report| {
+                println!("runtime and model are ready");
+                if report.migrated_config {
+                    println!("migrated the legacy configuration (the original was backed up)");
+                }
+                println!("{} vocabulary entries", report.vocabulary_entries);
+                if !no_service && !report.service_started {
+                    println!("user service was installed but could not be started; toggle will still autostart it");
+                }
+            }))
+        }
+        Ok(cli::Command::Doctor) => doctor(),
+        Ok(cli::Command::Vocabulary(command)) => vocabulary(command),
+        Ok(cli::Command::Daemon) => result(daemon::run()),
+        Ok(cli::Command::EngineHost { runtime }) => result(engine::run_host(&runtime)),
+        Err(error) => {
+            eprintln!("whispers: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
-async fn transcribe_file(cli: &Cli, file: &Path, output: Option<&Path>, raw: bool) -> Result<()> {
-    let config = Config::load(cli.config.as_deref())?;
-    asr::validation::validate_transcription_config(&config)?;
-    tracing::info!("decoding audio file: {}", file.display());
-    let mut samples = file_audio::decode_audio_file(file)?;
-    audio::preprocess_audio(&mut samples, file_audio::TARGET_SAMPLE_RATE);
-    let rewrite_service = if raw {
-        None
-    } else {
-        postprocess::execution::prepare_rewrite_service(&config)
-    };
-    if let Some(service) = rewrite_service.as_ref() {
-        postprocess::execution::prewarm_rewrite_service(service, "file transcription");
-    }
-    let prepared = asr::prepare::prepare_transcriber(&config)?;
-    asr::prepare::prewarm_transcriber(&prepared, "file transcription");
-    let transcript =
-        asr::execute::transcribe_audio(&config, prepared, samples, file_audio::TARGET_SAMPLE_RATE)
-            .await?;
-    let runtime_text_resources = if raw {
-        None
-    } else {
-        Some(load_runtime_text_resources_or_default(
-            &config,
-            "file transcription",
-        ))
-    };
-
-    let text = if raw {
-        postprocess::planning::raw_text(&transcript)
-    } else {
-        postprocess::finalize::finalize_transcript(
-            &config,
-            transcript,
-            rewrite_service.as_ref(),
-            runtime_text_resources.as_ref(),
-            None,
-            None,
-        )
-        .await
-        .text
-    };
-
-    if let Some(out_path) = output {
-        tokio::fs::write(out_path, &text).await?;
-        tracing::info!("transcription written to {}", out_path.display());
-    } else {
-        println!("{text}");
-    }
-
-    Ok(())
-}
-
-fn load_runtime_text_resources_or_default(
-    config: &Config,
-    phase: &'static str,
-) -> postprocess::planning::RuntimeTextResources {
-    let (resources, degraded) =
-        postprocess::planning::load_runtime_text_resources_with_status(config);
-    if degraded {
-        tracing::warn!(
-            "runtime text resources for {phase} were degraded; using available defaults"
+fn doctor() -> ExitCode {
+    let report = doctor::run();
+    for check in &report.checks {
+        println!(
+            "{:<4} {:<18} {}",
+            check.level.label(),
+            check.name,
+            check.detail
         );
     }
-    resources
+    if report.healthy() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
-async fn run_default(cli: &Cli) -> Result<()> {
-    let Some(pid_lock) = runtime_support::acquire_or_signal_lock()? else {
-        return Ok(());
-    };
-
-    tracing::info!("whispers v{}", env!("CARGO_PKG_VERSION"));
-
-    // Load config
-    let config = Config::load(cli.config.as_deref())?;
-    asr::validation::validate_transcription_config(&config)?;
-    inject::validate_injection_prerequisites()?;
-    tracing::debug!("config loaded: {config:?}");
-
-    app::run(config, pid_lock).await
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
-
-    runtime_support::init_tracing(cli.verbose);
-
-    match &cli.command {
-        None => run_default(&cli).await,
-        Some(Command::Completions { shell }) => completions::run_completions(*shell),
-        Some(Command::Setup) => setup::run_setup(cli.config.as_deref()).await,
-        Some(Command::Transcribe { file, output, raw }) => {
-            transcribe_file(&cli, file, output.as_deref(), *raw).await
+fn vocabulary(command: cli::VocabularyCommand) -> ExitCode {
+    let operation = (|| {
+        let mut vocabulary = whispers::vocabulary::Vocabulary::load()?;
+        match command {
+            cli::VocabularyCommand::List => {
+                for entry in &vocabulary.entries {
+                    println!("{}\t{}", entry.term, entry.aliases.join(", "));
+                }
+            }
+            cli::VocabularyCommand::Add { term, aliases } => {
+                vocabulary.add(&term, aliases)?;
+                vocabulary.save()?;
+            }
+            cli::VocabularyCommand::Remove { term } => {
+                if !vocabulary.remove(&term) {
+                    return Err(whispers::Error::message(format!(
+                        "vocabulary term not found: {term}"
+                    )));
+                }
+                vocabulary.save()?;
+            }
         }
-        Some(Command::Model { action }) => match action {
-            ModelAction::List => {
-                model::list_models(cli.config.as_deref());
-                Ok(())
+        Ok(())
+    })();
+    result(operation)
+}
+
+fn control(request: &ControlRequest, autostart: bool) -> ExitCode {
+    match daemon::request(request, autostart) {
+        Ok(response) => {
+            if let Some(message) = response.message {
+                println!("{message}");
+            } else {
+                println!("{}", response.state);
             }
-            ModelAction::Download { name } => {
-                model::download_model(name).await?;
-                Ok(())
+            if response.ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
             }
-            ModelAction::Select { name } => model::select_model(name, cli.config.as_deref()),
-        },
-        Some(Command::AsrModel { action }) => match action {
-            AsrModelAction::List => {
-                asr_model::list_models(cli.config.as_deref());
-                Ok(())
+        }
+        Err(error) => {
+            if matches!(request, ControlRequest::Status | ControlRequest::Cancel) {
+                println!("idle");
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("whispers: {error}");
+                ExitCode::FAILURE
             }
-            AsrModelAction::Download { name } => {
-                asr_model::download_model(name).await?;
-                Ok(())
-            }
-            AsrModelAction::Select { name } => asr_model::select_model(name, cli.config.as_deref()),
-        },
-        Some(Command::RewriteModel { action }) => match action {
-            RewriteModelAction::List => {
-                rewrite_model::list_models(cli.config.as_deref());
-                Ok(())
-            }
-            RewriteModelAction::Download { name } => {
-                rewrite_model::download_model(name).await?;
-                Ok(())
-            }
-            RewriteModelAction::Select { name } => {
-                rewrite_model::select_model(name, cli.config.as_deref())
-            }
-        },
-        Some(Command::Dictionary { action }) => match action {
-            DictionaryAction::List => personalization::list_dictionary(cli.config.as_deref()),
-            DictionaryAction::Add { phrase, replace } => {
-                personalization::add_dictionary(cli.config.as_deref(), phrase, replace)
-            }
-            DictionaryAction::Remove { phrase } => {
-                personalization::remove_dictionary(cli.config.as_deref(), phrase)
-            }
-        },
-        Some(Command::AppRule { action }) => match action {
-            AppRuleAction::Path => agentic_rewrite::print_app_rule_path(cli.config.as_deref()),
-            AppRuleAction::List => agentic_rewrite::list_app_rules(cli.config.as_deref()),
-            AppRuleAction::Add {
-                name,
-                instructions,
-                surface_kind,
-                app_id,
-                window_title_contains,
-                browser_domain_contains,
-                correction_policy,
-            } => agentic_rewrite::add_app_rule(
-                cli.config.as_deref(),
-                name,
-                instructions,
-                build_context_matcher(
-                    *surface_kind,
-                    app_id.as_ref(),
-                    window_title_contains.as_ref(),
-                    browser_domain_contains.as_ref(),
-                ),
-                *correction_policy,
-            ),
-            AppRuleAction::Remove { name } => {
-                agentic_rewrite::remove_app_rule(cli.config.as_deref(), name)
-            }
-        },
-        Some(Command::Glossary { action }) => match action {
-            GlossaryAction::Path => agentic_rewrite::print_glossary_path(cli.config.as_deref()),
-            GlossaryAction::List => agentic_rewrite::list_glossary(cli.config.as_deref()),
-            GlossaryAction::Add {
-                term,
-                aliases,
-                surface_kind,
-                app_id,
-                window_title_contains,
-                browser_domain_contains,
-            } => agentic_rewrite::add_glossary_entry(
-                cli.config.as_deref(),
-                term,
-                aliases,
-                build_context_matcher(
-                    *surface_kind,
-                    app_id.as_ref(),
-                    window_title_contains.as_ref(),
-                    browser_domain_contains.as_ref(),
-                ),
-            ),
-            GlossaryAction::Remove { term } => {
-                agentic_rewrite::remove_glossary_entry(cli.config.as_deref(), term)
-            }
-        },
-        Some(Command::Cloud { action }) => match action {
-            CloudAction::Check => {
-                let config = Config::load(cli.config.as_deref())?;
-                cloud::validate_config(&config)?;
-                let service = cloud::CloudService::new(&config)?;
-                service.check().await?;
-                println!(
-                    "Cloud provider '{}' is configured and reachable.",
-                    config.cloud.provider.as_str()
-                );
-                Ok(())
-            }
-        },
-        Some(Command::Snippets { action }) => match action {
-            SnippetAction::List => personalization::list_snippets(cli.config.as_deref()),
-            SnippetAction::Add { name, text } => {
-                personalization::add_snippet(cli.config.as_deref(), name, text)
-            }
-            SnippetAction::Remove { name } => {
-                personalization::remove_snippet(cli.config.as_deref(), name)
-            }
-        },
-        Some(Command::RewriteInstructionsPath) => {
-            personalization::print_rewrite_instructions_path(cli.config.as_deref())
+        }
+    }
+}
+
+fn result(result: whispers::Result<()>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("whispers: {error}");
+            ExitCode::FAILURE
         }
     }
 }

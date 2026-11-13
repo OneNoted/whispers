@@ -1,113 +1,57 @@
 [package]
 name = "whispers"
-version = "0.2.4"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Speech-to-text dictation tool for Wayland"
 authors = ["OneNoted <notes@madeingotland.com>"]
 license = "MIT"
+description = "Local intended-text dictation for Wayland"
 repository = "https://github.com/OneNoted/whispers"
-keywords = ["wayland", "speech-to-text", "whisper", "dictation", "voice"]
+readme = "README.md"
+keywords = ["wayland", "speech-to-text", "dictation", "voice"]
 categories = ["accessibility", "multimedia"]
 include = [
     "Cargo.toml",
     "Cargo.lock",
     "README.md",
+    "docs/architecture.md",
     "docs/install.md",
     "docs/cli.md",
     "docs/troubleshooting.md",
-    "docs/contributing.md",
     "LICENSE",
     "NOTICE",
-    "config.example.toml",
-    ".cargo/config.toml",
     "sounds/*.wav",
+    "ui/*.qml",
     "src/**",
-    "vendor/whisper-rs-sys/**/*",
+    "tests/**",
 ]
 
 [dependencies]
-# Async runtime
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "io-util", "net", "process"] }
-
-# Audio capture
-cpal = "0.17"
-
-# Whisper transcription
-whisper-rs = "0.15"
-llama-cpp-2 = { version = "0.1.138", optional = true }
-
-# uinput virtual keyboard for paste keystroke
-evdev = { version = "0.13" }
-
-# Sound feedback
-rodio = { version = "0.21", default-features = false, features = ["playback", "wav", "mp3", "flac", "vorbis", "mp4"] }
-
-# Config
-serde = { version = "1", features = ["derive"] }
-encoding_rs = "0.8"
-serde_json = "1"
-toml = "0.9"
-base64 = "0.22"
-unicode-segmentation = "1.12"
-flacenc = { version = "0.5.1", default-features = false }
-
-# CLI
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4.5"
-clap_complete_nushell = "4.5"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Error handling
-thiserror = "2"
-
-# Signal sending for PID-based toggle
 libc = "0.2"
+libloading = "0.8"
+lexopt = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.9"
 
-# Model downloading and management
-reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls", "json", "multipart"] }
-indicatif = "0.18"
-futures-util = "0.3"
-toml_edit = "0.23"
-dialoguer = { version = "0.12", default-features = false }
-console = "0.16"
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unexpected_cfgs = "deny"
 
-# OSD overlay (whispers-osd binary) — wayland-native, no GTK
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols = { version = "0.32", features = ["client"], optional = true }
-wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
-font8x8 = { version = "0.3", optional = true }
-fontdue = { version = "0.9", optional = true }
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+multiple_crate_versions = "allow"
+must_use_candidate = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
 
-[features]
-default = ["osd"]
-cuda = ["whisper-rs/cuda", "llama-cpp-2?/cuda"]
-local-rewrite = ["dep:llama-cpp-2"]
-osd = [
-    "dep:wayland-client",
-    "dep:wayland-protocols",
-    "dep:wayland-protocols-wlr",
-    "dep:font8x8",
-    "dep:fontdue",
-]
-vulkan = ["whisper-rs/vulkan"]
-
-[[bin]]
-name = "whispers"
-path = "src/main.rs"
-
-[[bin]]
-name = "whispers-osd"
-path = "src/bin/whispers-osd.rs"
-required-features = ["osd"]
-
-[[bin]]
-name = "whispers-rewrite-worker"
-path = "src/bin/whispers-rewrite-worker/main.rs"
-required-features = ["local-rewrite"]
-
-[dev-dependencies]
-httpmock = "0.8.3"
+[profile.release]
+lto = "thin"
+strip = "symbols"
