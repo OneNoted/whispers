@@ -5,7 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-use crate::config::{CONFIG_VERSION, Config, DEFAULT_FINAL_MODEL, LEGACY_ENGLISH_FINAL_MODEL};
+use crate::config::{
+    Backend, CONFIG_VERSION, Config, DEFAULT_FINAL_MODEL, LEGACY_ENGLISH_FINAL_MODEL,
+};
 use crate::vocabulary::Vocabulary;
 use crate::{Error, Result, paths};
 
@@ -19,6 +21,10 @@ const MODEL_NAME: &str = "nemotron-3.5-asr-streaming-0.6b-560ms-int8";
 const FINAL_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2";
 const FINAL_MODEL_SHA256: &str = "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9";
 const FINAL_MODEL_ROOT: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8";
+const WHISPER_MODEL_FILE: &str = "ggml-large-v3-turbo.bin";
+const WHISPER_MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo.bin";
+const WHISPER_MODEL_SHA256: &str =
+    "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69";
 const LLAMA_URL: &str = "https://github.com/ggml-org/llama.cpp/releases/download/b10258/llama-b10258-bin-ubuntu-vulkan-x64.tar.gz";
 const LLAMA_SHA256: &str = "21e2ca510aa05f5814adfab82e4cb2d31641596aa9a8780ae05132c731ebe75a";
 const LLAMA_ROOT: &str = "llama-b10258";
@@ -43,7 +49,11 @@ struct LegacyVocabularyPaths {
     glossary: PathBuf,
 }
 
-pub fn run(offline_pack: Option<&Path>, install_service: bool) -> Result<SetupReport> {
+pub fn run(
+    offline_pack: Option<&Path>,
+    install_service: bool,
+    backend: Option<Backend>,
+) -> Result<SetupReport> {
     if std::env::consts::OS != "linux" || std::env::consts::ARCH != "x86_64" {
         return Err(Error::message(
             "managed runtime setup currently supports Linux x86_64 only",
@@ -69,8 +79,11 @@ pub fn run(offline_pack: Option<&Path>, install_service: bool) -> Result<SetupRe
             return Err(error);
         }
     };
-    let config = Config::load(None)?;
-    let install_asr = !config.recognition.uses_whisper_cli();
+    let mut config = Config::load(None)?;
+    let selected = backend.unwrap_or_else(|| {
+        Backend::parse(&config.recognition.runtime).unwrap_or(Backend::SherpaOnnx)
+    });
+    let install_asr = selected != Backend::WhisperCli;
     if let Some(pack) = offline_pack {
         install_from_pack(pack, &data_dir, config.enhancement.enabled, install_asr)?;
     } else {
@@ -79,10 +92,15 @@ pub fn run(offline_pack: Option<&Path>, install_service: bool) -> Result<SetupRe
     if install_asr {
         validate_asr_installation(&data_dir)?;
     } else {
+        install_whisper_model(&config, &data_dir, offline_pack.is_none())?;
         validate_whisper_cli_installation(&config)?;
     }
     if config.enhancement.enabled {
         validate_enhancement_installation(&data_dir)?;
+    }
+    if config.recognition.runtime != selected.runtime() {
+        config.recognition.runtime = selected.runtime().into();
+        config.save_to(&config_path)?;
     }
     let service_started = install_service && install_user_service()?;
     Ok(SetupReport {
@@ -514,6 +532,45 @@ pub fn validate_asr_installation(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn install_whisper_model(config: &Config, data_dir: &Path, allow_network: bool) -> Result<()> {
+    let model = paths::fallback_model(&config.recognition.fallback_model)?;
+    let pinned = config.recognition.fallback_model == WHISPER_MODEL_FILE;
+    ensure_whisper_model(&model, pinned, data_dir, allow_network)
+}
+
+fn ensure_whisper_model(
+    model: &Path,
+    pinned: bool,
+    data_dir: &Path,
+    allow_network: bool,
+) -> Result<()> {
+    // A file the user already placed wins over the pinned asset: the checksum
+    // guards the download, and setup never overwrites or removes user models.
+    if model.is_file() {
+        return Ok(());
+    }
+    if !pinned {
+        return Err(Error::message(format!(
+            "whisper model is missing: {} (point [recognition].fallback_model at an existing file)",
+            model.display()
+        )));
+    }
+    if !allow_network {
+        return Err(Error::message(format!(
+            "whisper model is missing: {} (runtime packs cannot provide it)",
+            model.display()
+        )));
+    }
+    let downloads = data_dir.join("downloads");
+    fs::create_dir_all(&downloads)?;
+    install_file(
+        WHISPER_MODEL_URL,
+        WHISPER_MODEL_SHA256,
+        &downloads.join(WHISPER_MODEL_FILE),
+        model,
+    )
+}
+
 fn validate_whisper_cli_installation(config: &Config) -> Result<()> {
     let available = Command::new("whisper-cli")
         .arg("--help")
@@ -523,7 +580,7 @@ fn validate_whisper_cli_installation(config: &Config) -> Result<()> {
         .is_ok_and(|status| status.success());
     if !available {
         return Err(Error::message(
-            "[recognition].runtime = \"whisper-cli\" requires whisper-cli in PATH",
+            "[recognition].runtime = \"whisper-cli\" requires whisper-cli in PATH (install whisper-cpp and a GPU backend such as ggml-vulkan)",
         ));
     }
     let model = paths::fallback_model(&config.recognition.fallback_model)?;
@@ -861,6 +918,45 @@ mod tests {
             fs::read(&target).ok().as_deref(),
             Some(b"replacement".as_slice())
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn accepts_an_existing_pinned_whisper_model_without_a_checksum() {
+        let root = std::env::temp_dir().join(format!(
+            "whispers-whisper-model-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        assert!(fs::create_dir_all(&root).is_ok());
+        let model = root.join(WHISPER_MODEL_FILE);
+
+        assert!(ensure_whisper_model(&model, true, &root, false).is_err());
+        assert!(fs::write(&model, b"a locally converted model").is_ok());
+        assert!(ensure_whisper_model(&model, true, &root, false).is_ok());
+        assert!(ensure_whisper_model(&model, true, &root, true).is_ok());
+        assert_eq!(
+            fs::read(&model).ok().as_deref(),
+            Some(b"a locally converted model".as_slice())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn accepts_an_existing_custom_whisper_model_without_a_checksum() {
+        let root = std::env::temp_dir().join(format!(
+            "whispers-custom-whisper-model-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        assert!(fs::create_dir_all(&root).is_ok());
+        let model = root.join("ggml-other.bin");
+
+        assert!(ensure_whisper_model(&model, false, &root, false).is_err());
+        assert!(fs::write(&model, b"anything").is_ok());
+        assert!(ensure_whisper_model(&model, false, &root, false).is_ok());
+
         let _ = fs::remove_dir_all(root);
     }
 

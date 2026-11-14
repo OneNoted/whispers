@@ -33,6 +33,29 @@ pub struct DeliveryConfig {
     pub typing_delay_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Backend {
+    SherpaOnnx,
+    WhisperCli,
+}
+
+impl Backend {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "sherpa" | "sherpa-onnx" | "sherpa_onnx" => Some(Self::SherpaOnnx),
+            "whisper" | "whisper-cli" | "whisper_cli" => Some(Self::WhisperCli),
+            _ => None,
+        }
+    }
+
+    pub const fn runtime(self) -> &'static str {
+        match self {
+            Self::SherpaOnnx => "sherpa-onnx",
+            Self::WhisperCli => "whisper-cli",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RecognitionConfig {
@@ -91,10 +114,7 @@ impl RecognitionConfig {
     /// True when recognition runs through the external `whisper-cli` binary.
     /// That path transcribes the finished recording and has no partial results.
     pub fn uses_whisper_cli(&self) -> bool {
-        matches!(
-            self.runtime.trim().to_ascii_lowercase().as_str(),
-            "whisper-cli" | "whisper_cli" | "whisper"
-        )
+        Backend::parse(&self.runtime) == Some(Backend::WhisperCli)
     }
 }
 
@@ -156,6 +176,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_names_are_parsed() {
+        assert_eq!(Backend::parse("sherpa"), Some(Backend::SherpaOnnx));
+        assert_eq!(Backend::parse(" Sherpa_Onnx "), Some(Backend::SherpaOnnx));
+        assert_eq!(Backend::parse("whisper"), Some(Backend::WhisperCli));
+        assert_eq!(Backend::parse("Whisper_CLI"), Some(Backend::WhisperCli));
+        assert_eq!(Backend::parse("cloud"), None);
+        assert_eq!(Backend::WhisperCli.runtime(), "whisper-cli");
+    }
 
     #[test]
     fn whisper_cli_runtime_is_recognized() {

@@ -12,17 +12,13 @@ feedback = true
 typing_delay_ms = 0
 
 [recognition]
-# "sherpa-onnx" runs the managed streaming runtime installed by
-# `whispers setup`. "whisper-cli" runs the external whisper.cpp CLI on the
-# finished recording, with no streaming preview. Install whisper-cpp plus a GPU
-# backend first (on Arch: `pacman -S whisper-cpp ggml-vulkan`); the plain
-# `ggml` package is CPU only and makes large models unusably slow.
+# Managed recognizer: "sherpa-onnx" (default) or "whisper-cli".
 runtime = "sherpa-onnx"
-# Low-latency text shown in the OSD while speaking (sherpa-onnx only).
+# Low-latency text shown in the OSD while speaking.
 model = "nemotron-3.5-asr-streaming-0.6b-560ms-int8"
-# Multilingual full-recording pass used for delivered text (sherpa-onnx only).
+# Multilingual full-recording pass used for delivered text.
 final_model = "nemo-parakeet-tdt-0.6b-v3-int8"
-# whisper.cpp model used by `whisper-cli` and as the managed ASR fallback.
+# whisper.cpp model used by "whisper-cli" and as the managed ASR fallback.
 fallback_model = "ggml-large-v3-turbo.bin"
 
 [enhancement]

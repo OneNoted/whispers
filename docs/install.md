@@ -48,21 +48,30 @@ and delivery without taking keyboard focus.
 ## Whisper.cpp backend
 
 Recognition can run on the external whisper.cpp CLI instead of the managed
-sherpa-onnx runtime:
+sherpa-onnx runtime. Select it during installation:
+
+```sh
+whispers setup --backend whisper
+```
+
+Setup sets `[recognition].runtime = "whisper-cli"`, skips the sherpa-onnx
+downloads, and installs the pinned `ggml-large-v3-turbo.bin` into the data
+directory. The equivalent configuration is:
 
 ```toml
 [recognition]
 runtime = "whisper-cli"
-fallback_model = "/absolute/path/to/ggml-large-v3-turbo.bin"
+fallback_model = "ggml-large-v3-turbo.bin"
 ```
 
-The CLI transcribes the finished recording, so this mode has no partial
-previews. `whispers setup` skips the sherpa-onnx downloads in this mode and
-verifies that `whisper-cli` and the configured model exist.
+`fallback_model` is resolved relative to the data directory
+(`${XDG_DATA_HOME:-~/.local/share}/whispers`); use an absolute path only for a
+model stored elsewhere. The CLI transcribes the finished recording, so this mode
+has no partial previews.
 
-The distro `whisper-cpp` package ships only the CPU `ggml` backend, which takes
-seconds per sentence with larger models. Install a GPU backend as well. On Arch
-Linux:
+Setup requires `whisper-cli` in PATH. The distro `whisper-cpp` package ships only
+the CPU `ggml` backend, which takes seconds per sentence with larger models.
+Install a GPU backend as well. On Arch Linux:
 
 ```sh
 sudo pacman -S whisper-cpp ggml-vulkan
@@ -85,6 +94,16 @@ Normal network setup:
 ```sh
 whispers setup
 ```
+
+Pick the recognition backend during installation:
+
+```sh
+whispers setup --backend whisper
+```
+
+`--backend sherpa` is the default and installs the managed runtime. Choosing
+whisper requires `whisper-cli` in PATH and installs the GGML model instead; see
+[Whisper.cpp backend](#whispercpp-backend).
 
 Install without enabling the user service:
 
@@ -109,6 +128,9 @@ pack/
 ```sh
 whispers setup --runtime-pack ./pack
 ```
+
+`whispers setup --backend whisper --runtime-pack` uses an existing model and
+fails when it is missing, because runtime packs do not carry GGML models.
 
 Setup writes configuration version 2, imports the old dictionary and technical
 glossary when present, and copies the old configuration to a timestamped backup.
