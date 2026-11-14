@@ -1,3 +1,15 @@
+//! End-to-end checks against the runtimes installed by `whispers setup`.
+//!
+//! The engine host defaults to the current executable, which is the test
+//! binary here, so point it at the real CLI:
+//!
+//! ```sh
+//! cargo install --path . --locked && whispers setup
+//! WHISPERS_ENGINE_HOST=$(command -v whispers) \
+//! WHISPERS_TEST_ENHANCE_MODEL=~/.local/share/whispers/rewrite/Qwen_Qwen3.5-4B-Q4_K_M.gguf \
+//!   cargo test --test runtime_smoke -- --ignored --test-threads=1
+//! ```
+
 use whispers::config::Config;
 use whispers::config::EnhancementConfig;
 use whispers::engine::EngineClient;
