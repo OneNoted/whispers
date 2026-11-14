@@ -70,12 +70,17 @@ pub fn run(offline_pack: Option<&Path>, install_service: bool) -> Result<SetupRe
         }
     };
     let config = Config::load(None)?;
+    let install_asr = !config.recognition.uses_whisper_cli();
     if let Some(pack) = offline_pack {
-        install_from_pack(pack, &data_dir, config.enhancement.enabled)?;
+        install_from_pack(pack, &data_dir, config.enhancement.enabled, install_asr)?;
     } else {
-        install_from_network(&data_dir, config.enhancement.enabled)?;
+        install_from_network(&data_dir, config.enhancement.enabled, install_asr)?;
     }
-    validate_asr_installation(&data_dir)?;
+    if install_asr {
+        validate_asr_installation(&data_dir)?;
+    } else {
+        validate_whisper_cli_installation(&config)?;
+    }
     if config.enhancement.enabled {
         validate_enhancement_installation(&data_dir)?;
     }
@@ -233,45 +238,51 @@ fn import_glossary(path: &Path, vocabulary: &mut Vocabulary) -> Result<()> {
     Ok(())
 }
 
-fn install_from_network(data_dir: &Path, install_enhancement: bool) -> Result<()> {
+fn install_from_network(
+    data_dir: &Path,
+    install_enhancement: bool,
+    install_asr: bool,
+) -> Result<()> {
     let downloads = data_dir.join("downloads");
     fs::create_dir_all(&downloads)?;
-    install_archive(
-        Asset {
-            name: "sherpa-runtime",
-            extension: "tar.bz2",
-            extract_flag: "-xjf",
-            url: RUNTIME_URL,
-            sha256: RUNTIME_SHA256,
-            archive_root: RUNTIME_ROOT,
-        },
-        &downloads,
-        &data_dir.join("runtimes/sherpa-onnx/current"),
-    )?;
-    install_archive(
-        Asset {
-            name: "nemotron-model",
-            extension: "tar.bz2",
-            extract_flag: "-xjf",
-            url: MODEL_URL,
-            sha256: MODEL_SHA256,
-            archive_root: MODEL_ROOT,
-        },
-        &downloads,
-        &data_dir.join("models").join(MODEL_NAME),
-    )?;
-    install_archive(
-        Asset {
-            name: "parakeet-v3-final-model",
-            extension: "tar.bz2",
-            extract_flag: "-xjf",
-            url: FINAL_MODEL_URL,
-            sha256: FINAL_MODEL_SHA256,
-            archive_root: FINAL_MODEL_ROOT,
-        },
-        &downloads,
-        &data_dir.join("models").join(DEFAULT_FINAL_MODEL),
-    )?;
+    if install_asr {
+        install_archive(
+            Asset {
+                name: "sherpa-runtime",
+                extension: "tar.bz2",
+                extract_flag: "-xjf",
+                url: RUNTIME_URL,
+                sha256: RUNTIME_SHA256,
+                archive_root: RUNTIME_ROOT,
+            },
+            &downloads,
+            &data_dir.join("runtimes/sherpa-onnx/current"),
+        )?;
+        install_archive(
+            Asset {
+                name: "nemotron-model",
+                extension: "tar.bz2",
+                extract_flag: "-xjf",
+                url: MODEL_URL,
+                sha256: MODEL_SHA256,
+                archive_root: MODEL_ROOT,
+            },
+            &downloads,
+            &data_dir.join("models").join(MODEL_NAME),
+        )?;
+        install_archive(
+            Asset {
+                name: "parakeet-v3-final-model",
+                extension: "tar.bz2",
+                extract_flag: "-xjf",
+                url: FINAL_MODEL_URL,
+                sha256: FINAL_MODEL_SHA256,
+                archive_root: FINAL_MODEL_ROOT,
+            },
+            &downloads,
+            &data_dir.join("models").join(DEFAULT_FINAL_MODEL),
+        )?;
+    }
     if install_enhancement {
         install_archive(
             Asset {
@@ -359,24 +370,31 @@ fn install_file(url: &str, sha256: &str, download: &Path, target: &Path) -> Resu
     Ok(())
 }
 
-fn install_from_pack(pack: &Path, data_dir: &Path, install_enhancement: bool) -> Result<()> {
+fn install_from_pack(
+    pack: &Path,
+    data_dir: &Path,
+    install_enhancement: bool,
+    install_asr: bool,
+) -> Result<()> {
     if !pack.is_dir() {
         return Err(Error::message(
             "--runtime-pack must name an unpacked runtime directory",
         ));
     }
-    copy_install(
-        &pack.join("runtimes/sherpa-onnx/current"),
-        &data_dir.join("runtimes/sherpa-onnx/current"),
-    )?;
-    copy_install(
-        &pack.join("models").join(MODEL_NAME),
-        &data_dir.join("models").join(MODEL_NAME),
-    )?;
-    copy_install(
-        &pack.join("models").join(DEFAULT_FINAL_MODEL),
-        &data_dir.join("models").join(DEFAULT_FINAL_MODEL),
-    )?;
+    if install_asr {
+        copy_install(
+            &pack.join("runtimes/sherpa-onnx/current"),
+            &data_dir.join("runtimes/sherpa-onnx/current"),
+        )?;
+        copy_install(
+            &pack.join("models").join(MODEL_NAME),
+            &data_dir.join("models").join(MODEL_NAME),
+        )?;
+        copy_install(
+            &pack.join("models").join(DEFAULT_FINAL_MODEL),
+            &data_dir.join("models").join(DEFAULT_FINAL_MODEL),
+        )?;
+    }
     if install_enhancement {
         copy_install(
             &pack.join(paths::MANAGED_LLAMA_RUNTIME),
@@ -492,6 +510,28 @@ pub fn validate_asr_installation(data_dir: &Path) -> Result<()> {
                 path.display()
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_whisper_cli_installation(config: &Config) -> Result<()> {
+    let available = Command::new("whisper-cli")
+        .arg("--help")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !available {
+        return Err(Error::message(
+            "[recognition].runtime = \"whisper-cli\" requires whisper-cli in PATH",
+        ));
+    }
+    let model = paths::fallback_model(&config.recognition.fallback_model)?;
+    if !model.is_file() {
+        return Err(Error::message(format!(
+            "whisper-cli model is missing: {}",
+            model.display()
+        )));
     }
     Ok(())
 }

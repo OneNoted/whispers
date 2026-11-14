@@ -36,9 +36,12 @@ pub struct DeliveryConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RecognitionConfig {
+    /// `sherpa-onnx` uses the managed streaming engine. `whisper-cli` runs the
+    /// external whisper.cpp binary on the completed recording instead.
     pub runtime: String,
     pub model: String,
     pub final_model: String,
+    /// whisper.cpp model used by `whisper-cli` and as the managed fallback.
     pub fallback_model: String,
 }
 
@@ -81,6 +84,17 @@ impl Default for RecognitionConfig {
             final_model: DEFAULT_FINAL_MODEL.into(),
             fallback_model: "ggml-large-v3-turbo.bin".into(),
         }
+    }
+}
+
+impl RecognitionConfig {
+    /// True when recognition runs through the external `whisper-cli` binary.
+    /// That path transcribes the finished recording and has no partial results.
+    pub fn uses_whisper_cli(&self) -> bool {
+        matches!(
+            self.runtime.trim().to_ascii_lowercase().as_str(),
+            "whisper-cli" | "whisper_cli" | "whisper"
+        )
     }
 }
 
@@ -142,6 +156,21 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whisper_cli_runtime_is_recognized() {
+        let mut config = Config::default();
+        assert!(!config.recognition.uses_whisper_cli());
+
+        config.recognition.runtime = "whisper-cli".into();
+        assert!(config.recognition.uses_whisper_cli());
+
+        config.recognition.runtime = " Whisper_CLI ".into();
+        assert!(config.recognition.uses_whisper_cli());
+
+        config.recognition.runtime = "sherpa-onnx".into();
+        assert!(!config.recognition.uses_whisper_cli());
+    }
 
     #[test]
     fn existing_unversioned_configuration_requires_migration() {

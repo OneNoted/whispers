@@ -49,9 +49,13 @@ limited to terminal surfaces.
 ## Privacy and failure policy
 
 Audio is held in memory for the active dictation and is not retained. Temporary
-fallback WAV files are deleted immediately after `whisper-cli` exits.
+WAV files used by `whisper-cli` are deleted immediately after it exits.
 Transcripts are not logged. Setup downloads public artifacts; the dictation
 pipeline makes no network requests.
+
+Setting `[recognition].runtime = "whisper-cli"` skips the managed sherpa-onnx
+stage entirely: the recording is transcribed by the external whisper.cpp CLI
+after it stops, so there are no streaming previews.
 
 Enhancement output is rejected if it is empty, invalid, excessively expanded,
 or removes protected symbols or numbers. Final ASR falls back first to the

@@ -26,6 +26,25 @@ pw-cat --record --raw --format f32 --rate 16000 --channels 1 >/dev/null
 Set `[audio].device` only when the default PipeWire source is not the microphone
 you want.
 
+## Whisper.cpp shows no partial text
+
+Expected when `[recognition].runtime = "whisper-cli"`. The external CLI runs
+after the recording stops, so the OSD only shows listening and transcribing.
+Switch to `sherpa-onnx` to get the live preview.
+
+## Whisper.cpp is slow or the GPU stays idle
+
+The backend package, not whispers, selects the device:
+
+```sh
+pacman -Q whisper-cpp ggml-vulkan
+whisper-cli -m /path/to/ggml-large-v3-turbo.bin -f sample.wav -nt
+```
+
+The log must print `using Vulkan0 backend`. With only `ggml` installed the CLI
+falls back to CPU and a large model takes seconds per sentence. `whispers
+doctor` reports the configured CLI and model path.
+
 ## Text was copied instead of typed
 
 Whispers refuses to type into a different window than the one where dictation
