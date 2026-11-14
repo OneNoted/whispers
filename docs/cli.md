@@ -50,8 +50,12 @@ from the delivered text.
 ## Setup
 
 ```sh
-whispers setup [--runtime-pack DIR] [--no-service]
+whispers setup [--runtime-pack DIR] [--no-service] [--backend sherpa|whisper]
 ```
 
 Network setup verifies SHA-256 before atomically installing each asset. An
 offline pack is copied without following symbolic links or special files.
+
+`--backend whisper` sets `[recognition].runtime = "whisper-cli"`, skips the
+sherpa-onnx downloads and installs the pinned GGML model. The default
+`--backend sherpa` installs the managed runtime.

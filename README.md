@@ -30,8 +30,9 @@ separators too.
 The Rust application is a control plane with seven direct dependencies. It does
 not compile or vendor whisper.cpp, llama.cpp, CUDA, an async runtime, an audio
 stack, or a GUI toolkit. `whispers setup` downloads checksum-pinned sherpa-onnx,
-Nemotron, Parakeet, llama.cpp, and Qwen artifacts. Inference runtimes can
-therefore be
+Nemotron, Parakeet, llama.cpp, and Qwen artifacts; `whispers setup --backend
+whisper` installs the pinned GGML model and uses the external whisper.cpp CLI
+instead of the managed recognizer. Inference runtimes can therefore be
 upgraded independently without turning every application build into an ML
 toolchain build.
 

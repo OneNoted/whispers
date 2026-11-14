@@ -74,26 +74,33 @@ impl Pipeline for LocalPipeline {
         // Capture begins before the potentially cold ASR handshake. A reader-
         // acknowledged boundary discards startup audio before the listening state
         // is announced, so the ready signal cannot contaminate recognition.
-        let streaming = self.start_engine();
+        let streaming = !self.config.recognition.uses_whisper_cli() && self.start_engine();
         recording.discard_buffered(&receiver)?;
-        let engine = Arc::clone(&self.engine);
-        let feeder = thread::spawn(move || {
-            while let Ok(samples) = receiver.recv() {
-                let Ok(mut engine) = engine.lock() else {
-                    break;
-                };
-                let Some(client) = engine.as_mut() else {
-                    break;
-                };
-                if client.push_audio(&samples).is_err() {
-                    break;
+        let feeder = if streaming {
+            let engine = Arc::clone(&self.engine);
+            Some(thread::spawn(move || {
+                while let Ok(samples) = receiver.recv() {
+                    let Ok(mut engine) = engine.lock() else {
+                        break;
+                    };
+                    let Some(client) = engine.as_mut() else {
+                        break;
+                    };
+                    if client.push_audio(&samples).is_err() {
+                        break;
+                    }
                 }
-            }
-        });
+            }))
+        } else {
+            // The recording keeps its own copy of the audio, so the receiver
+            // can be dropped when whisper-cli transcribes the finished file.
+            drop(receiver);
+            None
+        };
         desktop::show_listening();
         Ok(Box::new(LocalDictation {
             recording: Some(recording),
-            feeder: Some(feeder),
+            feeder,
             engine: Arc::clone(&self.engine),
             target,
             config: self.config.clone(),

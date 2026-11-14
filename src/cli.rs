@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use lexopt::prelude::*;
 
+use crate::config::Backend;
 use crate::{Error, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13,6 +14,7 @@ pub enum Command {
     Setup {
         offline_pack: Option<PathBuf>,
         no_service: bool,
+        backend: Option<Backend>,
     },
     Doctor,
     Vocabulary(VocabularyCommand),
@@ -55,16 +57,26 @@ where
         Value(value) if value == "setup" => {
             let mut offline_pack = None;
             let mut no_service = false;
+            let mut backend = None;
             while let Some(argument) = parser.next()? {
                 match argument {
                     Long("runtime-pack") => offline_pack = Some(parser.value()?.into()),
                     Long("no-service") => no_service = true,
+                    Long("backend") => {
+                        let value = parser.value()?.string()?;
+                        backend = Some(Backend::parse(&value).ok_or_else(|| {
+                            Error::message(format!(
+                                "unknown backend: {value} (use sherpa or whisper)"
+                            ))
+                        })?);
+                    }
                     _ => return Err(argument.unexpected().into()),
                 }
             }
             Command::Setup {
                 offline_pack,
                 no_service,
+                backend,
             }
         }
         Value(value) if value == "vocabulary" => parse_vocabulary(&mut parser)?,
@@ -121,7 +133,7 @@ Usage:
   whispers toggle                  Start or stop dictation
   whispers cancel                  Cancel the active dictation
   whispers status                  Show service state
-  whispers setup [--runtime-pack DIR] [--no-service]
+  whispers setup [--runtime-pack DIR] [--no-service] [--backend sherpa|whisper]
   whispers doctor
   whispers vocabulary list
   whispers vocabulary add TERM --alias SPOKEN [--alias SPOKEN ...]
@@ -135,6 +147,27 @@ mod tests {
     #[test]
     fn no_arguments_is_toggle() {
         assert_eq!(parse(Vec::<String>::new()).ok(), Some(Command::Toggle));
+    }
+
+    #[test]
+    fn parses_setup_backend() {
+        assert_eq!(
+            parse(["setup", "--backend", "whisper"]).ok(),
+            Some(Command::Setup {
+                offline_pack: None,
+                no_service: false,
+                backend: Some(Backend::WhisperCli),
+            })
+        );
+        assert_eq!(
+            parse(["setup", "--no-service", "--backend", "sherpa"]).ok(),
+            Some(Command::Setup {
+                offline_pack: None,
+                no_service: true,
+                backend: Some(Backend::SherpaOnnx),
+            })
+        );
+        assert!(parse(["setup", "--backend", "cloud"]).is_err());
     }
 
     #[test]
