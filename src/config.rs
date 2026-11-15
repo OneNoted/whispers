@@ -136,24 +136,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn saving_through_a_symlink_updates_the_link_target() {
-        let directory =
-            std::env::temp_dir().join(format!("whispers-config-symlink-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        assert!(fs::create_dir_all(&directory).is_ok());
-        let target = directory.join("dotfiles-config.toml");
-        let link = directory.join("config.toml");
-        assert!(fs::write(&target, "version = 1\n").is_ok());
-        assert!(std::os::unix::fs::symlink(&target, &link).is_ok());
-
-        assert!(Config::default().save_to(&link).is_ok());
-
-        assert!(link.is_symlink());
-        assert!(fs::read_to_string(&target).is_ok_and(|text| text.contains("version = 2")));
-        let _ = fs::remove_dir_all(&directory);
-    }
-
-    #[test]
     fn existing_unversioned_configuration_requires_migration() {
         let path = std::env::temp_dir().join(format!(
             "whispers-config-version-test-{}.toml",

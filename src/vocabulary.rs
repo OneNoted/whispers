@@ -184,26 +184,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn saving_through_a_symlink_updates_the_link_target() {
-        let directory = std::env::temp_dir().join(format!(
-            "whispers-vocabulary-symlink-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&directory);
-        assert!(fs::create_dir_all(&directory).is_ok());
-        let target = directory.join("dotfiles-vocabulary.toml");
-        let link = directory.join("vocabulary.toml");
-        assert!(fs::write(&target, "version = 0\n").is_ok());
-        assert!(std::os::unix::fs::symlink(&target, &link).is_ok());
-
-        assert!(Vocabulary::default().save_to(&link).is_ok());
-
-        assert!(link.is_symlink());
-        assert!(fs::read_to_string(&target).is_ok_and(|text| text.contains("version = 1")));
-        let _ = fs::remove_dir_all(&directory);
-    }
-
-    #[test]
     fn replaces_aliases_at_word_boundaries() {
         let vocabulary = Vocabulary {
             version: VOCABULARY_VERSION,

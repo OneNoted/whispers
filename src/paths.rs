@@ -112,3 +112,35 @@ fn xdg_path(variable: &str, fallback: &str) -> Result<PathBuf> {
         .map(|path| path.join(fallback))
         .ok_or_else(|| Error::message(format!("neither {variable} nor HOME is set")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_writes_follow_symlinks() {
+        let directory =
+            env::temp_dir().join(format!("whispers-write-atomic-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        assert!(fs::create_dir_all(&directory).is_ok());
+        let target = directory.join("target.toml");
+        let link = directory.join("link.toml");
+        let dangling = directory.join("dangling.toml");
+        assert!(fs::write(&target, "old").is_ok());
+        assert!(std::os::unix::fs::symlink(&target, &link).is_ok());
+        assert!(std::os::unix::fs::symlink("missing.toml", &dangling).is_ok());
+
+        assert!(write_atomic(&link, b"new").is_ok());
+        assert!(write_atomic(&dangling, b"created").is_ok());
+
+        assert!(link.is_symlink() && dangling.is_symlink());
+        assert_eq!(fs::read_to_string(&target).ok().as_deref(), Some("new"));
+        assert_eq!(
+            fs::read_to_string(directory.join("missing.toml"))
+                .ok()
+                .as_deref(),
+            Some("created")
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+}
