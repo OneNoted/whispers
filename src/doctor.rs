@@ -54,24 +54,31 @@ pub fn run() -> Report {
             None
         }
     };
-    match paths::data_dir().and_then(|path| setup::validate_asr_installation(&path)) {
-        Ok(()) => checks.push(pass(
-            "managed ASR",
-            "sherpa-onnx, Nemotron preview, and multilingual Parakeet v3 final ASR are installed",
-        )),
-        Err(error) => checks.push(fail("managed ASR", error.to_string())),
-    }
-    if let Ok(library) = paths::sherpa_library() {
-        // SAFETY: Doctor only asks the dynamic loader to validate this pinned shared object.
-        match unsafe { libloading::Library::new(&library) } {
-            Ok(handle) => {
-                drop(handle);
-                checks.push(pass("ASR loader", "sherpa-onnx shared library loads"));
-            }
-            Err(error) => checks.push(fail(
-                "ASR loader",
-                format!("{}: {error}", library.display()),
+    let whisper_cli = config
+        .as_ref()
+        .is_some_and(|config| config.recognition.uses_whisper_cli());
+    if whisper_cli {
+        command_check(&mut checks, "whisper ASR", "whisper-cli", true);
+    } else {
+        match paths::data_dir().and_then(|path| setup::validate_asr_installation(&path)) {
+            Ok(()) => checks.push(pass(
+                "managed ASR",
+                "sherpa-onnx, Nemotron preview, and multilingual Parakeet v3 final ASR are installed",
             )),
+            Err(error) => checks.push(fail("managed ASR", error.to_string())),
+        }
+        if let Ok(library) = paths::sherpa_library() {
+            // SAFETY: Doctor only asks the dynamic loader to validate this pinned shared object.
+            match unsafe { libloading::Library::new(&library) } {
+                Ok(handle) => {
+                    drop(handle);
+                    checks.push(pass("ASR loader", "sherpa-onnx shared library loads"));
+                }
+                Err(error) => checks.push(fail(
+                    "ASR loader",
+                    format!("{}: {error}", library.display()),
+                )),
+            }
         }
     }
     command_check(&mut checks, "audio capture", "pw-cat", true);
@@ -87,7 +94,9 @@ pub fn run() -> Report {
     osd_check(&mut checks);
     command_check(&mut checks, "notification fallback", "notify-send", false);
     command_check(&mut checks, "audio feedback", "pw-play", false);
-    command_check(&mut checks, "fallback ASR", "whisper-cli", false);
+    if !whisper_cli {
+        command_check(&mut checks, "fallback ASR", "whisper-cli", false);
+    }
     if env::var_os("XDG_RUNTIME_DIR").is_some() {
         checks.push(pass("runtime directory", "XDG_RUNTIME_DIR is set"));
     } else {
@@ -102,10 +111,22 @@ pub fn run() -> Report {
         ));
     }
     if let Some(config) = config {
+        let whisper_cli = config.recognition.uses_whisper_cli();
         match paths::fallback_model(&config.recognition.fallback_model) {
             Ok(path) if path.is_file() => checks.push(pass(
-                "fallback model",
+                if whisper_cli {
+                    "whisper model"
+                } else {
+                    "fallback model"
+                },
                 format!("{} is available", path.display()),
+            )),
+            Ok(path) if whisper_cli => checks.push(fail(
+                "whisper model",
+                format!(
+                    "{} is missing; whisper-cli cannot transcribe",
+                    path.display()
+                ),
             )),
             Ok(path) => checks.push(warn(
                 "fallback model",
@@ -114,6 +135,7 @@ pub fn run() -> Report {
                     path.display()
                 ),
             )),
+            Err(error) if whisper_cli => checks.push(fail("whisper model", error.to_string())),
             Err(error) => checks.push(warn("fallback model", error.to_string())),
         }
         enhancement_checks(&mut checks, &config);

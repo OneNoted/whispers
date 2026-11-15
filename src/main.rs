@@ -19,8 +19,9 @@ fn main() -> ExitCode {
         Ok(cli::Command::Setup {
             offline_pack,
             no_service,
+            backend,
         }) => {
-            result(setup::run(offline_pack.as_deref(), !no_service).map(|report| {
+            result(setup::run(offline_pack.as_deref(), !no_service, backend).map(|report| {
                 println!("runtime and model are ready");
                 if report.migrated_config {
                     println!("migrated the legacy configuration (the original was backed up)");
