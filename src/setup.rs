@@ -922,40 +922,26 @@ mod tests {
     }
 
     #[test]
-    fn accepts_an_existing_pinned_whisper_model_without_a_checksum() {
+    fn existing_whisper_models_are_kept_without_a_download() {
         let root = std::env::temp_dir().join(format!(
             "whispers-whisper-model-test-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
         assert!(fs::create_dir_all(&root).is_ok());
-        let model = root.join(WHISPER_MODEL_FILE);
+        let pinned = root.join(WHISPER_MODEL_FILE);
+        let custom = root.join("ggml-other.bin");
 
-        assert!(ensure_whisper_model(&model, true, &root, false).is_err());
-        assert!(fs::write(&model, b"a locally converted model").is_ok());
-        assert!(ensure_whisper_model(&model, true, &root, false).is_ok());
-        assert!(ensure_whisper_model(&model, true, &root, true).is_ok());
+        assert!(ensure_whisper_model(&pinned, true, &root, false).is_err());
+        assert!(ensure_whisper_model(&custom, false, &root, true).is_err());
+        assert!(fs::write(&pinned, b"a locally converted model").is_ok());
+        assert!(fs::write(&custom, b"anything").is_ok());
+        assert!(ensure_whisper_model(&pinned, true, &root, true).is_ok());
+        assert!(ensure_whisper_model(&custom, false, &root, false).is_ok());
         assert_eq!(
-            fs::read(&model).ok().as_deref(),
+            fs::read(&pinned).ok().as_deref(),
             Some(b"a locally converted model".as_slice())
         );
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn accepts_an_existing_custom_whisper_model_without_a_checksum() {
-        let root = std::env::temp_dir().join(format!(
-            "whispers-custom-whisper-model-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        assert!(fs::create_dir_all(&root).is_ok());
-        let model = root.join("ggml-other.bin");
-
-        assert!(ensure_whisper_model(&model, false, &root, false).is_err());
-        assert!(fs::write(&model, b"anything").is_ok());
-        assert!(ensure_whisper_model(&model, false, &root, false).is_ok());
 
         let _ = fs::remove_dir_all(root);
     }

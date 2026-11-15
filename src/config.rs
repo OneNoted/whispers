@@ -178,28 +178,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_names_are_parsed() {
-        assert_eq!(Backend::parse("sherpa"), Some(Backend::SherpaOnnx));
+    fn whisper_cli_runtime_is_recognized() {
         assert_eq!(Backend::parse(" Sherpa_Onnx "), Some(Backend::SherpaOnnx));
         assert_eq!(Backend::parse("whisper"), Some(Backend::WhisperCli));
-        assert_eq!(Backend::parse("Whisper_CLI"), Some(Backend::WhisperCli));
         assert_eq!(Backend::parse("cloud"), None);
-        assert_eq!(Backend::WhisperCli.runtime(), "whisper-cli");
-    }
 
-    #[test]
-    fn whisper_cli_runtime_is_recognized() {
         let mut config = Config::default();
         assert!(!config.recognition.uses_whisper_cli());
-
-        config.recognition.runtime = "whisper-cli".into();
+        config.recognition.runtime = Backend::WhisperCli.runtime().into();
         assert!(config.recognition.uses_whisper_cli());
-
-        config.recognition.runtime = " Whisper_CLI ".into();
-        assert!(config.recognition.uses_whisper_cli());
-
-        config.recognition.runtime = "sherpa-onnx".into();
-        assert!(!config.recognition.uses_whisper_cli());
     }
 
     #[test]

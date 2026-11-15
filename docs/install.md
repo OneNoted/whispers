@@ -69,7 +69,7 @@ fallback_model = "ggml-large-v3-turbo.bin"
 model stored elsewhere. The CLI transcribes the finished recording, so this mode
 has no partial previews.
 
-Setup requires `whisper-cli` in PATH. The distro `whisper-cpp` package ships only
+Setup requires `whisper-cli` 1.8 or newer in PATH. The distro `whisper-cpp` package ships only
 the CPU `ggml` backend, which takes seconds per sentence with larger models.
 Install a GPU backend as well. On Arch Linux:
 
@@ -95,14 +95,7 @@ Normal network setup:
 whispers setup
 ```
 
-Pick the recognition backend during installation:
-
-```sh
-whispers setup --backend whisper
-```
-
-`--backend sherpa` is the default and installs the managed runtime. Choosing
-whisper requires `whisper-cli` in PATH and installs the GGML model instead; see
+To recognize with whisper.cpp instead of the managed runtime, see
 [Whisper.cpp backend](#whispercpp-backend).
 
 Install without enabling the user service:
