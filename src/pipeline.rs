@@ -273,10 +273,12 @@ fn transcribe_with_whisper(
             "--language",
             &config.language,
         ]);
-    // Bias the fallback decoder toward vocabulary terms it would otherwise mishear.
+    // Bias the decoder toward vocabulary terms it would otherwise mishear.
+    // whisper.cpp's Vulkan flash attention returns empty output when a prompt
+    // is prefilled, so turn it off while one is set (`-nfa` needs 1.8+).
     let prompt = vocabulary.initial_prompt();
     if !prompt.is_empty() {
-        command.args(["--prompt", &prompt]);
+        command.args(["--prompt", &prompt, "-nfa"]);
     }
     let output = command
         .stdout(Stdio::piped())
