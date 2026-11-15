@@ -127,15 +127,7 @@ impl Config {
     }
 
     pub fn save_to(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut temporary = path.as_os_str().to_os_string();
-        temporary.push(format!(".{}.tmp", std::process::id()));
-        let temporary = PathBuf::from(temporary);
-        fs::write(&temporary, toml::to_string_pretty(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        paths::write_atomic(path, toml::to_string_pretty(self)?.as_bytes())
     }
 }
 

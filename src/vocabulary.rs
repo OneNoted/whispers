@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -57,13 +57,7 @@ impl Vocabulary {
     }
 
     pub fn save_to(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let temporary = temporary_path(path);
-        fs::write(&temporary, toml::to_string_pretty(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        paths::write_atomic(path, toml::to_string_pretty(self)?.as_bytes())
     }
 
     pub fn add(&mut self, term: &str, aliases: Vec<String>) -> Result<()> {
@@ -183,12 +177,6 @@ fn boundary_after(input: &str, index: usize) -> bool {
 
 fn word_character(character: char) -> bool {
     character.is_alphanumeric() || character == '_'
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let mut temporary = path.as_os_str().to_os_string();
-    temporary.push(format!(".{}.tmp", std::process::id()));
-    PathBuf::from(temporary)
 }
 
 #[cfg(test)]
